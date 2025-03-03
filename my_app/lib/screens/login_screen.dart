@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import '../auth_service.dart'; // Импорт AuthService
-import 'main_screen.dart'; // Импорт MainScreen
-import 'registration_screen.dart'; // Импорт RegistrationScreen
+import '../http/auth_service.dart'; // Импорт AuthService
+import '../screens/main_screen.dart'; // Импорт MainScreen
+import '../screens/registration_screen.dart'; // Импорт RegistrationScreen
 
 class LoginScreen extends StatefulWidget {
   @override
@@ -33,7 +33,7 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Неверный email или пароль')),
+          SnackBar(content: Text('Неверный login или пароль')),
         );
       }
     } catch (e) {
@@ -58,7 +58,7 @@ class _LoginScreenState extends State<LoginScreen> {
             SizedBox(height: 20),
             TextField(
               controller: _emailController,
-              decoration: InputDecoration(labelText: 'E-mail'),
+              decoration: InputDecoration(labelText: 'Login/E-mail/СНИЛС/Телефон'),
             ),
             SizedBox(height: 10),
             TextField(

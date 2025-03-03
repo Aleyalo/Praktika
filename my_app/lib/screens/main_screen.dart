@@ -4,7 +4,7 @@ import '../screens/colleagues_screen.dart';
 import '../screens/news_screen.dart';
 import '../screens/documents_screen.dart';
 import '../screens/profile_screen.dart';
-import '../auth_service.dart';
+import '../http/auth_service.dart';
 
 class MainScreen extends StatefulWidget {
   @override
@@ -13,10 +13,10 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
-  late Map<String, String> _user; // Хранилище для данных пользователя
+  late Map<String, dynamic> _user; // Хранилище для данных пользователя
 
   // Список экранов для навигации
-  final List _screens = [
+  final List<Widget> _screens = [
     ServicesScreen(),
     ColleaguesScreen(),
     NewsScreen(),
@@ -33,7 +33,13 @@ class _MainScreenState extends State<MainScreen> {
   // Метод для загрузки данных пользователя
   Future<void> _loadUserData() async {
     try {
+      print('Загрузка данных пользователя...');
       final user = await AuthService().getUserData(); // Получаем данные пользователя
+      if (user.isEmpty) {
+        print('Данные пользователя отсутствуют.');
+      } else {
+        print('Данные пользователя успешно загружены: $user');
+      }
       setState(() {
         _user = user; // Сохраняем данные пользователя
         _screens[4] = ProfileScreen(user: _user); // Обновляем экран профиля
@@ -53,6 +59,7 @@ class _MainScreenState extends State<MainScreen> {
         backgroundColor: Colors.yellow,
         currentIndex: _currentIndex,
         onTap: (index) {
+          print('Переключение экрана на индекс: $index');
           setState(() {
             _currentIndex = index; // Обновление индекса выбранного экрана
           });
