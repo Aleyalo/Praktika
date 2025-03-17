@@ -1,10 +1,11 @@
+// lib/screens/main_screen.dart
 import 'package:flutter/material.dart';
 import '../screens/services_screen.dart';
 import '../screens/colleagues_screen.dart';
 import '../screens/news_screen.dart';
 import '../screens/documents_screen.dart';
 import '../screens/profile_screen.dart';
-import '../http/auth_service.dart';
+import '../services//auth_service.dart';
 
 class MainScreen extends StatefulWidget {
   @override
@@ -13,36 +14,34 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
-  late Map<String, dynamic> _user; // Хранилище для данных пользователя
+  late Map<String, dynamic> _user;
 
-  // Список экранов для навигации
   final List<Widget> _screens = [
     ServicesScreen(),
     ColleaguesScreen(),
     NewsScreen(),
     DocumentsScreen(),
-    ProfileScreen(user: {}), // Заглушка для профиля (пустой Map)
+    ProfileScreen(user: {}),
   ];
 
   @override
   void initState() {
     super.initState();
-    _loadUserData(); // Загрузка данных пользователя при старте
+    _loadUserData();
   }
 
-  // Метод для загрузки данных пользователя
   Future<void> _loadUserData() async {
     try {
       print('Загрузка данных пользователя...');
-      final user = await AuthService().getUserData(); // Получаем данные пользователя
+      final user = await AuthService().getUserData();
       if (user.isEmpty) {
         print('Данные пользователя отсутствуют.');
       } else {
         print('Данные пользователя успешно загружены: $user');
       }
       setState(() {
-        _user = user; // Сохраняем данные пользователя
-        _screens[4] = ProfileScreen(user: _user); // Обновляем экран профиля
+        _user = user;
+        _screens[4] = ProfileScreen(user: _user);
       });
     } catch (e) {
       print('Ошибка при загрузке данных пользователя: $e');
@@ -52,7 +51,7 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _screens[_currentIndex], // Отображение текущего экрана
+      body: _screens[_currentIndex],
       bottomNavigationBar: BottomNavigationBar(
         selectedItemColor: Colors.black,
         unselectedItemColor: Colors.grey,
@@ -61,7 +60,7 @@ class _MainScreenState extends State<MainScreen> {
         onTap: (index) {
           print('Переключение экрана на индекс: $index');
           setState(() {
-            _currentIndex = index; // Обновление индекса выбранного экрана
+            _currentIndex = index;
           });
         },
         items: [

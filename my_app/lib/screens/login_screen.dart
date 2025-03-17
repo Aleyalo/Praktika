@@ -1,7 +1,8 @@
+// lib/screens/login_screen.dart
 import 'package:flutter/material.dart';
-import '../http/auth_service.dart'; // Импорт AuthService
-import '../screens/main_screen.dart'; // Импорт MainScreen
-import '../screens/registration_screen.dart'; // Импорт RegistrationScreen
+import '../services//auth_service.dart';
+import '../screens/main_screen.dart';
+import '../screens/registration_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   @override
@@ -25,7 +26,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       bool isLoggedIn = await AuthService().login(email, password);
-
       if (isLoggedIn) {
         Navigator.pushReplacement(
           context,
@@ -33,7 +33,7 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Неверный login или пароль')),
+          SnackBar(content: Text('Неверный логин или пароль')),
         );
       }
     } catch (e) {

@@ -1,9 +1,11 @@
+// lib/widgets/service_tile.dart
 import 'package:flutter/material.dart';
 
 class ServiceTile extends StatelessWidget {
   final String title;
+  final VoidCallback onTap;
 
-  ServiceTile({required this.title});
+  ServiceTile({required this.title, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -13,7 +15,7 @@ class ServiceTile extends StatelessWidget {
       child: ListTile(
         title: Text(title, style: TextStyle(color: Colors.white)),
         trailing: Icon(Icons.arrow_forward, color: Colors.white),
-        onTap: () {},
+        onTap: onTap, // Добавляем обработчик нажатия
       ),
     );
   }
