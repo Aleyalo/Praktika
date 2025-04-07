@@ -1,8 +1,8 @@
-// lib/screens/login_screen.dart
 import 'package:flutter/material.dart';
-import '../services//auth_service.dart';
+import '../services/auth_service.dart';
 import '../screens/main_screen.dart';
 import '../screens/registration_screen.dart';
+import '../screens/forgot_password_screen.dart'; // Импорт нового экрана
 
 class LoginScreen extends StatefulWidget {
   @override
@@ -80,6 +80,19 @@ class _LoginScreenState extends State<LoginScreen> {
                 );
               },
               child: Text('Зарегистрироваться'),
+            ),
+            // Добавляем ссылку "Забыли пароль"
+            TextButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => ForgotPasswordPage()),
+                );
+              },
+              child: Text(
+                'Забыли пароль?',
+                style: TextStyle(color: Colors.blue),
+              ),
             ),
           ],
         ),
