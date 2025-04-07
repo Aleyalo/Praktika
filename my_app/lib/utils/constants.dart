@@ -1,6 +1,6 @@
 // lib/utils/constants.dart
 class AppConstants {
-  static const String baseUrl = 'https://mw.azs-topline.ru';
+  static const String baseUrl = 'mw.azs-topline.ru';
   static const int port = 44445;
 
   static const Map<String, String> baseHeaders = {

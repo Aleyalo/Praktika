@@ -2,8 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../screens/main_screen.dart';
 import '../screens/registration_screen.dart';
-import '../screens/forgot_password_screen.dart'; // Импорт нового экрана
-
+import 'forgot_password_screen.dart';
 class LoginScreen extends StatefulWidget {
   @override
   _LoginScreenState createState() => _LoginScreenState();
@@ -16,16 +15,14 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _loginUser(BuildContext context) async {
     String email = _emailController.text.trim();
     String password = _passwordController.text.trim();
-
     if (email.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Пожалуйста, заполните все поля')),
       );
       return;
     }
-
     try {
-      bool isLoggedIn = await AuthService().login(email, password);
+      bool isLoggedIn = await AuthService().login(email, password, context);
       if (isLoggedIn) {
         Navigator.pushReplacement(
           context,
@@ -81,7 +78,6 @@ class _LoginScreenState extends State<LoginScreen> {
               },
               child: Text('Зарегистрироваться'),
             ),
-            // Добавляем ссылку "Забыли пароль"
             TextButton(
               onPressed: () {
                 Navigator.push(
@@ -91,7 +87,7 @@ class _LoginScreenState extends State<LoginScreen> {
               },
               child: Text(
                 'Забыли пароль?',
-                style: TextStyle(color: Colors.blue),
+                style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline),
               ),
             ),
           ],

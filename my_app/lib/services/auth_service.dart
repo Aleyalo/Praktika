@@ -1,8 +1,10 @@
-// lib/http/auth_service.dart
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/material.dart'; // Для BuildContext и виджетов
+import '../../utils/constants.dart';
+import '../../services/moderation_service.dart';
 
 class AuthService {
   static const String _baseUrl = 'https://mw.azs-topline.ru';
@@ -14,8 +16,14 @@ class AuthService {
     'Content-Type': 'application/json',
   };
 
-  Future<bool> login(String email, String password) async {
+  // Метод авторизации пользователя
+  Future<bool> login(String email, String password, BuildContext context) async {
     try {
+      // Проверяем наличие GUID модерации
+      if (await hasPendingModeration(context)) {
+        return false; // Блокируем дальнейшие действия
+      }
+
       final uri = mwUri('authorization');
       Codec stringToBase64 = utf8.fuse(base64);
       final body = stringToBase64.encode(jsonEncode({
@@ -31,7 +39,9 @@ class AuthService {
 
       print('Статус-код: ${response.statusCode}');
       if (response.statusCode != 200) {
-        print('Ответ сервера: ${response.body}');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка авторизации: ${response.body}')),
+        );
         return false;
       }
 
@@ -73,16 +83,39 @@ class AuthService {
     return false;
   }
 
+// Проверка наличия GUID модерации
+  Future<bool> hasPendingModeration(BuildContext context) async {
+    final moderationService = ModerationService();
+    final moderationGUID = await moderationService.getModerationGUID();
+
+    if (moderationGUID != null) {
+      final moderationStatus = await moderationService.checkModerationStatus(moderationGUID);
+
+      if (moderationStatus['status'] == 'На модерации') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ваша заявка на регистрацию находится на модерации. Ожидайте в течение 2 дней.')),
+        );
+        return true; // Блокируем дальнейшие действия
+      } else {
+        await moderationService.clearModerationGUID(); // Удаляем GUID
+      }
+    }
+    return false;
+  }
+
+  // Получение данных пользователя
   Future<Map<String, dynamic>> getUserData() async {
     return await _getUserData();
   }
 
+  // Сохранение данных пользователя
   Future<void> _saveUserData(Map<String, dynamic> userData) async {
     final prefs = await SharedPreferences.getInstance();
     prefs.setString('user_data', jsonEncode(userData));
     print('Данные пользователя сохранены: $userData');
   }
 
+  // Получение данных пользователя
   Future<Map<String, dynamic>> _getUserData() async {
     final prefs = await SharedPreferences.getInstance();
     final userDataString = prefs.getString('user_data');
@@ -92,28 +125,20 @@ class AuthService {
     return {};
   }
 
+  // Сохранение GUID
   Future<void> _saveGUID(String guid) async {
     final prefs = await SharedPreferences.getInstance();
     prefs.setString('guid', guid);
     print('GUID сохранен: $guid');
   }
 
+  // Получение GUID
   Future<String?> getGUID() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('guid');
   }
-}
 
-Uri mwUri(String method) {
-  return Uri(
-    scheme: 'https',
-    host: 'mw.azs-topline.ru',
-    path: '/hrm/hs/ewp/$method',
-    port: 44445,
-  );
-}
-// Расширение AuthService для очистки данных пользователя
-extension AuthServiceExtensions on AuthService {
+  // Удаление данных пользователя
   Future<void> _clearUserData() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('guid'); // Удаляем GUID
@@ -121,6 +146,18 @@ extension AuthServiceExtensions on AuthService {
     print('Данные пользователя очищены');
   }
 }
+
+// Вспомогательная функция для формирования URI
+Uri mwUri(String method) {
+  return Uri(
+    scheme: 'https',
+    host: 'mw.azs-topline.ru',
+    port: 44445,
+    path: '/hrm/hs/ewp/$method',
+  );
+}
+
+// Расширение для List<T>
 extension ListExtension<T> on List<T> {
   T? firstWhereOrNull(bool Function(T) test) {
     for (var element in this) {
@@ -128,5 +165,4 @@ extension ListExtension<T> on List<T> {
     }
     return null;
   }
-
 }
