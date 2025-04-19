@@ -2,7 +2,7 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart'; // Для работы с AuthService
 import './login_screen.dart'; // Для перехода на экран авторизации
-import 'package:shared_preferences/shared_preferences.dart';
+
 class SettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -34,7 +34,7 @@ class SettingsScreen extends StatelessWidget {
   Future<void> _logout(BuildContext context) async {
     try {
       final authService = AuthService();
-      await authService._clearUserData(); // Очищаем данные пользователя
+      await authService.logout(); // Очищаем данные пользователя и учетные данные
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(builder: (context) => LoginScreen()),
@@ -46,15 +46,5 @@ class SettingsScreen extends StatelessWidget {
         SnackBar(content: Text('Произошла ошибка: $e')),
       );
     }
-  }
-}
-
-// Расширение AuthService для очистки данных пользователя
-extension AuthServiceExtensions on AuthService {
-  Future<void> _clearUserData() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('guid'); // Удаляем GUID
-    await prefs.remove('user_data'); // Удаляем данные пользователя
-    print('Данные пользователя очищены');
   }
 }

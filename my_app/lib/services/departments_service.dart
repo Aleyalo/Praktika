@@ -1,20 +1,8 @@
+// lib/services/departments_service.dart
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
-
-class Department {
-  final String guid;
-  final String name;
-
-  Department({required this.guid, required this.name});
-
-  factory Department.fromJson(Map<String, dynamic> json) {
-    return Department(
-      guid: json['guid'] as String,
-      name: json['name'] as String,
-    );
-  }
-}
+import '../models/department.dart'; // Импортируем модель Department
 
 class DepartmentsService {
   static const String _baseUrl = 'mw.azs-topline.ru';
@@ -22,7 +10,7 @@ class DepartmentsService {
 
   Future<List<Department>> getDepartments({
     int limit = 50,
-    int page = 1,
+    int offset = 0, // Изменили page на offset
   }) async {
     try {
       final guid = await AuthService().getGUID();
@@ -36,7 +24,7 @@ class DepartmentsService {
         path: '/hrm/hs/ewp/departments',
         queryParameters: {
           'limit': limit.toString(),
-          'page': page.toString(),
+          'offset': offset.toString(), // Изменили page на offset
         },
       );
       print('Запрос к URI: $uri');

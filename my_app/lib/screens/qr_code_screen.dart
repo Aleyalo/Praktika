@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../services/auth_service.dart';
 import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 class QrCodeScreen extends StatelessWidget {
   @override
@@ -36,10 +37,10 @@ class QrCodeScreen extends StatelessWidget {
                   ),
                   SizedBox(height: 20),
                   Text(
-                    'ФИО: ${userData['surname']} ${userData['name']} ${userData['patronymic']}\n'
-                        'Организация: ${userData['organization']}\n'
-                        'Подразделение: ${userData['department']}\n'
-                        'Телефон: ${userData['phone'] ?? 'Не указан'}',
+                    'ФИО: ${userData['firstName']} ${userData['lastName']} ${userData['patronymic']}\n'
+                        'Пол: ${userData['gender']}\n'
+                        'Дата рождения: ${userData['birthday'].split('T')[0]}\n'
+                        'СНИЛС: ${userData['snils'] ?? 'Не указан'}',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 16),
                   ),
@@ -56,10 +57,30 @@ class QrCodeScreen extends StatelessWidget {
   Future<Map<String, dynamic>> _getUserData() async {
     try {
       final authService = AuthService();
-      final userData = await authService.getUserData();
       final guid = await authService.getGUID();
-      userData['guid'] = guid; // Добавляем GUID к данным пользователя
-      return userData;
+      if (guid == null || guid.isEmpty) {
+        throw Exception('GUID не найден');
+      }
+      final uri = Uri(
+        scheme: 'https',
+        host: 'mw.azs-topline.ru',
+        port: 44445,
+        path: '/hrm/hs/ewp/getQR',
+      );
+      final response = await http.get(
+        uri,
+        headers: {
+          ...AuthService.baseHeaders,
+          'ma-guid': guid,
+        },
+      ).timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        print('Ответ сервера: $json');
+        return json;
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
     } catch (e) {
       print('Ошибка при загрузке данных пользователя: $e');
       return {};
@@ -69,11 +90,12 @@ class QrCodeScreen extends StatelessWidget {
   // Метод для формирования данных для QR-кода
   String _generateQrData(Map<String, dynamic> userData) {
     return jsonEncode({
-      'fio': '${userData['surname']} ${userData['name']} ${userData['patronymic']}',
-      'guid': userData['guid'],
-      'organization': userData['organization'],
-      'department': userData['department'],
-      'phone': userData['phone'] ?? '',
+      'firstName': userData['firstName'],
+      'lastName': userData['lastName'],
+      'patronymic': userData['patronymic'],
+      'gender': userData['gender'],
+      'birthday': userData['birthday'],
+      'snils': userData['snils'] ?? '',
     });
   }
 }

@@ -1,8 +1,10 @@
+// lib/screens/colleagues_screen.dart
 import 'package:flutter/material.dart';
-import '../services//colleagues_service.dart';
-import '../services//organizations_service.dart';
-import '../services//departments_service.dart';
+import '../services/colleagues_service.dart';
+import '../services/departments_service.dart';
 import '../screens/colleague_card_screen.dart';
+import '../models/department.dart'; // Импортируем модель Department
+import '../services/auth_service.dart'; // Импортируем AuthService
 
 class ColleaguesScreen extends StatefulWidget {
   @override
@@ -11,7 +13,7 @@ class ColleaguesScreen extends StatefulWidget {
 
 class _ColleaguesScreenState extends State<ColleaguesScreen> {
   List<Map<String, dynamic>> _colleagues = [];
-  int _page = 1;
+  int _offset = 0;
   bool _isLoading = false;
   final int _limit = 50;
   bool _hasMore = true;
@@ -19,8 +21,9 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
   String _searchQuery = "";
   String? _selectedOrganization;
   String? _selectedDepartment;
-  List<Organization> _organizations = [];
+  List<Map<String, dynamic>> _organizations = []; // Изменяем тип на List<Map<String, dynamic>>
   List<Department> _departments = [];
+  String? _mainOrganizationGuid; // GUID основной организации
 
   @override
   void initState() {
@@ -36,30 +39,49 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
   }
 
   Future<void> _loadData() async {
-    await _fetchOrganizations();
+    await _fetchUserData();
     await _fetchDepartments();
     _loadMoreColleagues();
   }
 
-  Future<void> _fetchOrganizations() async {
+  Future<void> _fetchUserData() async {
     try {
-      final service = OrganizationsService();
-      final organizations = await service.getOrganizations(limit: 100, page: _page);
-      setState(() {
-        _organizations = organizations;
-      });
+      final authService = AuthService();
+      final userData = await authService.getUserData();
+      if (userData != null && userData.isNotEmpty) {
+        setState(() {
+          _organizations = userData['employment']
+              ?.where((job) => job['organization_name'] != null)
+              .map((job) => {
+            'guid': job['organization_guid'],
+            'name': job['organization_name'],
+          })
+              .toList() ?? [];
+
+          final mainJob = userData['employment']
+              ?.firstWhereOrNull((job) => job['type'] == 'Основное место работы');
+
+          _mainOrganizationGuid = mainJob?['organization_guid'];
+          _selectedOrganization = _mainOrganizationGuid; // Устанавливаем основную организацию по умолчанию
+        });
+        print('Список организаций: $_organizations'); // Добавляем лог
+        print('GUID основной организации: $_mainOrganizationGuid'); // Добавляем лог
+      } else {
+        print('Данные пользователя отсутствуют или некорректны');
+      }
     } catch (e) {
-      print('Ошибка при загрузке организаций: $e');
+      print('Ошибка при загрузке данных пользователя: $e');
     }
   }
 
   Future<void> _fetchDepartments() async {
     try {
       final service = DepartmentsService();
-      final departments = await service.getDepartments(limit: 100, page: _page);
+      final departments = await service.getDepartments(limit: 100, offset: 0);
       setState(() {
         _departments = departments;
       });
+      print('Список подразделений: $_departments'); // Добавляем лог
     } catch (e) {
       print('Ошибка при загрузке подразделений: $e');
     }
@@ -74,8 +96,9 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
         guidOrg: _selectedOrganization,
         guidSub: _selectedDepartment,
         limit: _limit,
-        page: _page,
+        offset: _offset,
       );
+      print('Полученные коллеги: $newColleagues'); // Добавляем лог
       if (newColleagues.isEmpty) {
         setState(() => _hasMore = false);
         return;
@@ -89,7 +112,7 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
       }
       setState(() {
         _colleagues = uniqueColleagues.values.toList();
-        _page++;
+        _offset += _limit;
         _hasMore = newColleagues.length == _limit;
       });
     } catch (e) {
@@ -124,15 +147,17 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                 onChanged: (String? newValue) {
                   setState(() {
                     _selectedOrganization = newValue;
+                    _selectedDepartment = null; // Сбрасываем выбор подразделения при изменении организации
+                    _resetColleaguesList();
                   });
                 },
                 items: _organizations.map<DropdownMenuItem<String>>((org) {
                   return DropdownMenuItem<String>(
-                    value: org.guid,
+                    value: org['guid'],
                     child: Container(
                       width: 320,
                       child: Text(
-                        org.name,
+                        org['name'],
                         overflow: TextOverflow.ellipsis,
                         maxLines: 1,
                       ),
@@ -148,7 +173,7 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                     return Container(
                       width: 320,
                       child: Text(
-                        org.name,
+                        org['name'],
                         overflow: TextOverflow.ellipsis,
                         maxLines: 1,
                       ),
@@ -163,9 +188,12 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                 onChanged: (String? newValue) {
                   setState(() {
                     _selectedDepartment = newValue;
+                    _resetColleaguesList();
                   });
                 },
-                items: _departments.map<DropdownMenuItem<String>>((dep) {
+                items: _departments
+                    .where((dep) => dep.organizationGuid == _selectedOrganization) // Фильтруем подразделения по организации
+                    .map<DropdownMenuItem<String>>((dep) {
                   return DropdownMenuItem<String>(
                     value: dep.guid,
                     child: Container(
@@ -183,7 +211,9 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                   contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 12),
                 ),
                 selectedItemBuilder: (BuildContext context) {
-                  return _departments.map<Widget>((dep) {
+                  return _departments
+                      .where((dep) => dep.organizationGuid == _selectedOrganization) // Фильтруем подразделения по организации
+                      .map<Widget>((dep) {
                     return Container(
                       width: 320,
                       child: Text(
@@ -203,10 +233,10 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                     child: ElevatedButton(
                       onPressed: () {
                         setState(() {
-                          _selectedOrganization = null;
+                          _selectedOrganization = _mainOrganizationGuid; // Устанавливаем основную организацию по умолчанию
                           _selectedDepartment = null;
                           _searchQuery = "";
-                          _page = 1;
+                          _offset = 0;
                           _colleagues.clear();
                           _hasMore = true;
                           _loadMoreColleagues();
@@ -221,7 +251,7 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                     child: ElevatedButton(
                       onPressed: () {
                         setState(() {
-                          _page = 1;
+                          _offset = 0;
                           _colleagues.clear();
                           _hasMore = true;
                           _loadMoreColleagues();
@@ -240,6 +270,13 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
     );
   }
 
+  void _resetColleaguesList() {
+    _colleagues.clear();
+    _offset = 0;
+    _hasMore = true;
+    _loadMoreColleagues();
+  }
+
   @override
   Widget build(BuildContext context) {
     var filteredColleagues = _colleagues.where((colleague) {
@@ -251,7 +288,6 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
       bool matchesOrganization = _selectedOrganization == null || organization == _selectedOrganization;
       return matchesName && matchesDepartment && matchesOrganization;
     }).toList();
-
     return Scaffold(
       appBar: AppBar(
         title: Text('Коллеги'),

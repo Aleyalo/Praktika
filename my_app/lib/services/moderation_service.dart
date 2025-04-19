@@ -2,7 +2,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../utils/constants.dart';
+import '../../utils/constants.dart';
 
 class ModerationService {
   static const String _baseUrl = 'mw.azs-topline.ru';

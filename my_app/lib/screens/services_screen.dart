@@ -1,10 +1,10 @@
 // lib/screens/services_screen.dart
 import 'package:flutter/material.dart';
-import '../widgets/service_button.dart'; // Импорт виджета ServiceButton
-import '../widgets/service_tile.dart'; // Импорт виджета ServiceTile
+import '../services/apps_service.dart'; // Исправленный импорт сервиса для получения приложений
 import '../screens/qr_code_screen.dart'; // Импорт экрана QR-кода
 import '../screens/settings_screen.dart'; // Импорт экрана настроек
-import '../services/apps_service.dart'; // Исправленный импорт сервиса для получения приложений
+import '../widgets/service_button.dart'; // Импорт виджета ServiceButton
+import '../widgets/service_tile.dart'; // Импорт виджета ServiceTile
 import 'package:flutter/foundation.dart'; // Для defaultTargetPlatform
 import 'package:url_launcher/url_launcher.dart'; // Для работы с ссылками
 
@@ -15,13 +15,11 @@ class ServicesScreen extends StatefulWidget {
 
 class _ServicesScreenState extends State<ServicesScreen> {
   late Future<List<Map<String, dynamic>>> _appsFuture;
-
   @override
   void initState() {
     super.initState();
     _appsFuture = _fetchApps(); // Загружаем данные при старте
   }
-
   Future<List<Map<String, dynamic>>> _fetchApps() async {
     try {
       final service = AppsService();
@@ -31,7 +29,6 @@ class _ServicesScreenState extends State<ServicesScreen> {
       return [];
     }
   }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -104,12 +101,10 @@ class _ServicesScreenState extends State<ServicesScreen> {
       ),
     );
   }
-
   // Метод для открытия ссылки на приложение
   void _openAppLink(Map<String, dynamic> app) async {
     final platform = defaultTargetPlatform;
     String? url;
-
     if (platform == TargetPlatform.android) {
       url = app['pathGoogle'];
     } else if (platform == TargetPlatform.iOS) {
@@ -119,15 +114,12 @@ class _ServicesScreenState extends State<ServicesScreen> {
     } else if (platform == TargetPlatform.fuchsia) {
       url = app['pathHuawei'];
     }
-
     // Если ссылка для платформы отсутствует, используем веб-ссылку
     url ??= app['pathWeb'];
-
     if (url?.isNotEmpty == true) {
       try {
         // Преобразуем nullable String в non-nullable String с помощью проверки
         final uri = Uri.parse(url!); // Используем оператор !, так как проверили url?.isNotEmpty
-
         if (await canLaunchUrl(uri)) {
           await launchUrl(uri, mode: LaunchMode.externalApplication);
         } else {

@@ -1,8 +1,10 @@
+// lib/screens/login_screen.dart
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../screens/main_screen.dart';
 import '../screens/registration_screen.dart';
 import 'forgot_password_screen.dart';
+
 class LoginScreen extends StatefulWidget {
   @override
   _LoginScreenState createState() => _LoginScreenState();
@@ -55,7 +57,7 @@ class _LoginScreenState extends State<LoginScreen> {
             SizedBox(height: 20),
             TextField(
               controller: _emailController,
-              decoration: InputDecoration(labelText: 'Login/E-mail/СНИЛС/Телефон'),
+              decoration: InputDecoration(labelText: 'Login/СНИЛС/Телефон'),
             ),
             SizedBox(height: 10),
             TextField(

@@ -1,3 +1,4 @@
+// lib/services/organizations_service.dart
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
@@ -5,7 +6,6 @@ import 'auth_service.dart';
 class Organization {
   final String guid;
   final String name;
-
   Organization({required this.guid, required this.name});
 
   factory Organization.fromJson(Map<String, dynamic> json) {
@@ -13,6 +13,13 @@ class Organization {
       guid: json['guid'] as String,
       name: json['name'] as String,
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'guid': guid,
+      'name': name,
+    };
   }
 }
 

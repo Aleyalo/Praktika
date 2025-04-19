@@ -1,3 +1,4 @@
+// lib/services/colleagues_service.dart
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
@@ -16,8 +17,8 @@ class ColleaguesService {
   Future<List<Map<String, dynamic>>> getColleagues({
     String? guidOrg,
     String? guidSub,
-    int limit = 100,
-    int page = 1,
+    int limit = 50,
+    int offset = 0, // Изменили page на offset
   }) async {
     try {
       final guid = await AuthService().getGUID();
@@ -33,7 +34,7 @@ class ColleaguesService {
           if (guidOrg != null) 'guidorg': guidOrg,
           if (guidSub != null) 'guidsub': guidSub,
           'limit': limit.toString(),
-          'page': page.toString(),
+          'offset': offset.toString(), // Изменили page на offset
         },
       );
       print('Запрос к URI: $uri');
