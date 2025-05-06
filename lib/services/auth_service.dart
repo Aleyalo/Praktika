@@ -1,32 +1,35 @@
+// lib/services/auth_service.dart
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter/material.dart'; // Для BuildContext и виджетов
+import 'package:flutter/material.dart';
+import '../../models/device_info.dart';
+import 'device_info_service.dart';
 import '../../utils/constants.dart';
 
 class AuthService {
-  static const String _baseUrl = 'https://mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
   static const Map<String, String> baseHeaders = {
     'Authorization': 'basic 0JDQtNC80LjQvdC60LA6MDk4NzY1NDMyMQ==',
     'ma-key': '0YHQtdC60YDQtdGC0L3Ri9C50LrQu9GO0Yc=',
     'Content-Type': 'application/json',
   };
 
-  // Метод авторизации пользователя
-  Future<bool> login(String email, String password, BuildContext context) async {
+  Future<Map<String, dynamic>> newLogin(String login, String password, BuildContext context) async {
     try {
-      final uri = mwUri('authorization');
-      Codec stringToBase64 = utf8.fuse(base64);
+      final deviceInfo = await DeviceInfoService.getDeviceInfo(context);
+      print('Собранная информация об устройстве: ${deviceInfo.toJson()}');
+      final uri = mwUri('new_authorization');
       final bodyMap = {
-        "login": email,
+        "deviceInfo": deviceInfo.toJson(),
+        "login": login,
         "password": password,
       };
-      final body = stringToBase64.encode(jsonEncode(bodyMap));
+      final body = base64Encode(utf8.encode(jsonEncode(bodyMap)));
       print('Запрос к URI: $uri');
-      print('Заголовки: $baseHeaders');
-      print('Тело запроса: $body');
+      print('Тело запроса (Base64): $body');
       final response = await http.post(
         uri,
         headers: baseHeaders,
@@ -34,72 +37,179 @@ class AuthService {
       ).timeout(Duration(seconds: 10));
       print('Статус-код: ${response.statusCode}');
       print('Ответ сервера: ${response.body}');
-      if (response.statusCode != 200) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка авторизации')),
-        );
-        return false;
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true && json['data'] != null) {
+          final data = json['data'];
+          final askHim = data['askHim'];
+          final oktell = askHim?['oktell'] ?? false;
+          if (askHim == null || !oktell) {
+            throw Exception('Ошибка при отправке кода подтверждения');
+          }
+          final guid = data['person']['guid'];
+          final deviceId = deviceInfo.deviceId;
+          if (guid != null && guid.isNotEmpty && deviceId != null && deviceId.isNotEmpty) {
+            // Не сохраняем данные здесь, ждём подтверждения устройства
+            return {
+              'success': true,
+              'data': data,
+              'guid': guid,
+              'deviceId': deviceId,
+              'askHim': askHim,
+            };
+          } else {
+            throw Exception('GUID или deviceId отсутствуют в ответе');
+          }
+        } else {
+          throw Exception(json['error'] ?? 'Неизвестная ошибка авторизации');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
       }
-      final json = jsonDecode(response.body);
-      if (json['success'] == true && json['data'] != null) {
-        final data = json['data'];
-        final guid = data['guid'];
-        if (guid != null && guid.isNotEmpty) {
-          await _saveCredentials(email, password, guid);
-          final employment = data['employment'] as List?;
-          final mainJob = employment?.firstWhereOrNull(
+    } catch (e) {
+      print('Ошибка при авторизации: $e');
+      rethrow;
+    }
+  }
+
+  Future<bool> confirmDevice({required String code, required String deviceId, required BuildContext context}) async {
+    try {
+      final guid = await getGUID();
+      if (guid == null || guid.isEmpty) {
+        throw Exception('GUID не найден');
+      }
+      final uri = mwUri('device_confirmed');
+      final bodyMap = {
+        "code": code,
+      };
+      final body = base64Encode(utf8.encode(jsonEncode(bodyMap)));
+      final headers = {
+        ...AuthService.baseHeaders,
+        'ma-guid': guid,
+        'deviceId': deviceId,
+      };
+      print('Подтверждение устройства: $uri');
+      print('Headers: $headers');
+      print('Body: $body');
+      final response = await http.put(
+        uri,
+        headers: headers,
+        body: body,
+      ).timeout(Duration(seconds: 10));
+      print('Статус-код подтверждения: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true && json['data'] != null) {
+          final data = json['data'];
+          final person = data['person'];
+          final employment = List<Map<String, dynamic>>.from(person['employment'] ?? []);
+          final mainJob = employment.firstWhere(
                 (job) => job['type'] == 'Основное место работы',
-          ) ?? {};
+            orElse: () => {},
+          );
           final userData = {
-            'name': data['firstName'] ?? '',
-            'surname': data['lastName'] ?? '',
-            'patronymic': data['patronymic'] ?? '',
+            'guid': person['guid'],
+            'firstName': person['firstName'] ?? '',
+            'lastName': person['lastName'] ?? '',
+            'patronymic': person['patronymic'] ?? '',
+            'phone': person['phone'] ?? '',
+            'email': person['email'] ?? '',
+            'snils': person['snils'] ?? '',
             'position': mainJob['post'] ?? '',
             'organization': mainJob['organization_name'] ?? '',
             'department': mainJob['department_name'] ?? '',
-            'phone': data['phone'] ?? '',
-            'email': data['email'] ?? '',
-            'snils': data['snils'] ?? '',
-            'mainOrganizationGuid': mainJob['organization_guid'] ?? '', // Добавляем GUID основной организации
-            'employment': employment, // Сохраняем все места работы
-            'guid': guid, // Добавляем GUID пользователя
+            'mainOrganizationGuid': mainJob['organization_guid'] ?? '',
+            'employment': employment,
           };
           await _saveUserData(userData);
-          await _saveEmployment(userData['employment']); // Сохраняем места работы
+          await _saveCredentials(person['email'], person['phone'], guid, deviceId);
           return true;
         } else {
-          print('GUID отсутствует в ответе');
+          throw Exception(json['error'] ?? 'Ошибка подтверждения устройства');
         }
       } else {
-        print('Поле success в ответе: ${json['success']}');
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
       }
     } catch (e) {
-      print('Ошибка при отправке запроса: $e');
+      print('Ошибка подтверждения устройства: $e');
+      rethrow;
     }
-    return false;
   }
 
-  // Метод повторной авторизации по GUID
+  Future<void> _saveCredentials(String email, String password, String guid, String deviceId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('email', email);
+    await prefs.setString('password', password);
+    await prefs.setString('guid', guid);
+    await prefs.setString('deviceId', deviceId);
+    print('Учетные данные сохранены');
+  }
+
+  Future<void> _saveUserData(Map<String, dynamic> userData) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_data', jsonEncode(userData));
+    print('Данные пользователя сохранены');
+  }
+
+  Future<Map<String, dynamic>> getUserData() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userDataString = prefs.getString('user_data');
+    if (userDataString != null) {
+      return jsonDecode(userDataString);
+    }
+    return {};
+  }
+
+  Future<String?> getGUID() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('guid');
+  }
+
+  Future<String?> getEmail() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('email');
+  }
+
+  Future<String?> getPassword() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('password');
+  }
+
+  Future<String?> getDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('deviceId');
+  }
+
+  Future<void> logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('guid');
+    await prefs.remove('user_data');
+    await prefs.remove('email');
+    await prefs.remove('password');
+    await prefs.remove('deviceId');
+    print('Данные пользователя удалены');
+  }
+
   Future<bool> reauthorizeByGuid() async {
     try {
       final guid = await getGUID();
       final email = await getEmail();
       final password = await getPassword();
       if (guid == null || guid.isEmpty || email == null || email.isEmpty || password == null || password.isEmpty) {
-        throw Exception('GUID, логин или пароль не найдены');
+        return false;
       }
       final uri = mwUri('authorization');
-      Codec stringToBase64 = utf8.fuse(base64);
       final bodyMap = {
         "login": email,
         "password": password,
       };
-      final body = stringToBase64.encode(jsonEncode(bodyMap));
+      final body = base64Encode(utf8.encode(jsonEncode(bodyMap)));
       final headers = {
         ...AuthService.baseHeaders,
-        'ma-guid': guid, // ma-guid не шифруется в Base64
-      } as Map<String, String>; // Явное преобразование в Map<String, String>
-      print('URI: $uri');
+        'ma-guid': guid,
+      };
+      print('Повторная авторизация: $uri');
       print('Headers: $headers');
       print('Body: $body');
       final response = await http.post(
@@ -107,159 +217,48 @@ class AuthService {
         headers: headers,
         body: body,
       ).timeout(Duration(seconds: 10));
-      print('Статус-код повторной авторизации: ${response.statusCode}');
+      print('Статус-код: ${response.statusCode}');
       print('Ответ сервера: ${response.body}');
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
         if (json['success'] == true && json['data'] != null) {
-          final data = json['data'] as Map<String, dynamic>;
-          final employment = data['employment'] as List?;
-          final mainJob = employment?.firstWhereOrNull(
+          final data = json['data'];
+          final employment = List<Map<String, dynamic>>.from(data['employment'] ?? []);
+          final mainJob = employment.firstWhere(
                 (job) => job['type'] == 'Основное место работы',
-          ) ?? {};
+            orElse: () => {},
+          );
           final userData = {
-            'name': data['firstName'] ?? '',
-            'surname': data['lastName'] ?? '',
+            'guid': data['guid'],
+            'firstName': data['firstName'] ?? '',
+            'lastName': data['lastName'] ?? '',
             'patronymic': data['patronymic'] ?? '',
-            'position': mainJob['post'] ?? '',
-            'organization': mainJob['organization_name'] ?? '',
-            'department': mainJob['department_name'] ?? '',
             'phone': data['phone'] ?? '',
             'email': data['email'] ?? '',
             'snils': data['snils'] ?? '',
-            'mainOrganizationGuid': mainJob['organization_guid'] ?? '', // Добавляем GUID основной организации
-            'employment': employment, // Сохраняем все места работы
-            'guid': data['guid'], // Добавляем GUID пользователя
+            'position': mainJob['post'] ?? '',
+            'organization': mainJob['organization_name'] ?? '',
+            'department': mainJob['department_name'] ?? '',
+            'mainOrganizationGuid': mainJob['organization_guid'] ?? '',
+            'employment': employment,
           };
           await _saveUserData(userData);
-          await _saveEmployment(userData['employment']); // Сохраняем места работы
           return true;
-        } else {
-          print('Поле success в ответе: ${json['success']}');
         }
-      } else {
-        print('HTTP-ошибка: ${response.statusCode}');
       }
+      return false;
     } catch (e) {
       print('Ошибка при повторной авторизации: $e');
+      return false;
     }
-    return false;
-  }
-
-  // Сохранение данных пользователя
-  Future<void> _saveUserData(Map<String, dynamic> userData) async {
-    final prefs = await SharedPreferences.getInstance();
-    prefs.setString('user_data', jsonEncode(userData));
-    print('Данные пользователя сохранены: $userData');
-  }
-
-  // Получение данных пользователя
-  Future<Map<String, dynamic>> getUserData() async {
-    final prefs = await SharedPreferences.getInstance();
-    final userDataString = prefs.getString('user_data');
-    if (userDataString != null) {
-      try {
-        final userData = jsonDecode(userDataString);
-        print('Полученные данные пользователя из SharedPreferences:');
-        print('Name: ${userData['name']}');
-        print('Surname: ${userData['surname']}');
-        print('Patronymic: ${userData['patronymic']}');
-        print('Position: ${userData['position']}');
-        print('Organization: ${userData['organization']}');
-        print('Department: ${userData['department']}');
-        print('Phone: ${userData['phone']}');
-        print('Email: ${userData['email']}');
-        print('Main Organization GUID: ${userData['mainOrganizationGuid']}');
-        print('Employment: ${userData['employment']}');
-        return userData;
-      } catch (e) {
-        print('Ошибка при декодировании user_data: $e');
-      }
-    }
-    print('Данные пользователя не найдены в SharedPreferences');
-    return {};
-  }
-
-  // Сохранение GUID, логина и пароля
-  Future<void> _saveCredentials(String email, String password, String guid) async {
-    final prefs = await SharedPreferences.getInstance();
-    prefs.setString('guid', guid);
-    prefs.setString('email', email);
-    prefs.setString('password', password);
-    print('GUID, логин и пароль сохранены');
-  }
-
-  // Получение GUID
-  Future<String?> getGUID() async {
-    final prefs = await SharedPreferences.getInstance();
-    final guid = prefs.getString('guid');
-    print('Полученный GUID: $guid');
-    return guid;
-  }
-
-  // Получение логина
-  Future<String?> getEmail() async {
-    final prefs = await SharedPreferences.getInstance();
-    final email = prefs.getString('email');
-    print('Полученный логин: $email');
-    return email;
-  }
-
-  // Получение пароля
-  Future<String?> getPassword() async {
-    final prefs = await SharedPreferences.getInstance();
-    final password = prefs.getString('password');
-    print('Полученный пароль: $password');
-    return password;
-  }
-
-  // Удаление данных пользователя и учетных данных
-  Future<void> logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('guid');
-    await prefs.remove('user_data');
-    await prefs.remove('email');
-    await prefs.remove('password');
-    await prefs.remove('employment'); // Удаляем места работы
-    print('Данные пользователя и учетные данные очищены');
-  }
-
-  // Сохранение мест работы
-  Future<void> _saveEmployment(List<dynamic>? employment) async {
-    final prefs = await SharedPreferences.getInstance();
-    if (employment != null) {
-      prefs.setString('employment', jsonEncode(employment));
-      print('Места работы сохранены: $employment');
-    }
-  }
-
-  // Получение мест работы
-  Future<List<dynamic>> getEmployment() async {
-    final prefs = await SharedPreferences.getInstance();
-    final employmentString = prefs.getString('employment');
-    if (employmentString != null) {
-      return jsonDecode(employmentString);
-    }
-    return [];
   }
 }
 
-// Вспомогательная функция для формирования URI
 Uri mwUri(String method) {
   return Uri(
     scheme: 'https',
-    host: 'mw.azs-topline.ru',
-    port: 44445,
+    host: AppConstants.baseUrl,
+    port: AppConstants.port,
     path: '/hrm/hs/ewp/$method',
   );
-}
-
-// Расширение для List<T>
-extension ListExtension<T> on List<T> {
-  T? firstWhereOrNull(bool Function(T) test) {
-    for (var element in this) {
-      if (test(element)) return element;
-    }
-    return null;
-  }
 }

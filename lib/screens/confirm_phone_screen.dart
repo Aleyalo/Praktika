@@ -1,9 +1,18 @@
+// lib/screens/confirm_phone_screen.dart
 import 'package:flutter/material.dart';
-import '../services/phone_edit_service.dart';
+import '../services/auth_service.dart';
+import '../screens/main_screen.dart';
 
 class ConfirmPhoneScreen extends StatefulWidget {
   final String newPhone;
-  const ConfirmPhoneScreen({Key? key, required this.newPhone}) : super(key: key);
+  final String? deviceId;
+  final String? guid; // Добавляем параметр guid
+  const ConfirmPhoneScreen({
+    Key? key,
+    required this.newPhone,
+    this.deviceId, // Делаем необязательным
+    this.guid, // Делаем необязательным
+  }) : super(key: key);
 
   @override
   _ConfirmPhoneScreenState createState() => _ConfirmPhoneScreenState();
@@ -19,21 +28,24 @@ class _ConfirmPhoneScreenState extends State<ConfirmPhoneScreen> {
       _isLoading = true;
       _errorMessage = '';
     });
-
     try {
-      final result = await PhoneEditService.editPhoneNumber(
-        newPhone: widget.newPhone,
-        step: 2,
+      final result = await AuthService().confirmDevice(
+        code: _codeController.text,
+        deviceId: widget.deviceId!,
+        context: context,
       );
-
-      if (result['success'] == true) {
+      if (result) {
         Navigator.pop(context, true);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Номер телефона успешно изменен')),
+          SnackBar(content: Text('Номер телефона успешно подтверждён')),
+        );
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => MainScreen()),
         );
       } else {
         setState(() {
-          _errorMessage = result['error'] ?? 'Ошибка подтверждения номера';
+          _errorMessage = 'Код подтверждения неверен';
         });
       }
     } catch (e) {
@@ -53,83 +65,40 @@ class _ConfirmPhoneScreenState extends State<ConfirmPhoneScreen> {
       appBar: AppBar(title: Text('Подтверждение номера')),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'На указанный номер будет совершен звонок. Введите последние 4 цифры номера, с которого поступил звонок:',
-              style: TextStyle(fontSize: 16),
-            ),
-            SizedBox(height: 20),
-            TextField(
-              controller: _codeController,
-              keyboardType: TextInputType.number,
-              maxLength: 4,
-              decoration: InputDecoration(
-                labelText: 'Код подтверждения',
-                border: OutlineInputBorder(),
-                errorText: _errorMessage,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'На указанный номер будет совершен звонок. Введите последние 4 цифры номера, с которого поступил звонок:',
+                style: TextStyle(fontSize: 16),
               ),
-            ),
-            SizedBox(height: 20),
-            if (_isLoading)
-              Center(child: CircularProgressIndicator())
-            else
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _confirmCode,
-                  child: Text('Подтвердить'),
+              SizedBox(height: 20),
+              TextField(
+                controller: _codeController,
+                keyboardType: TextInputType.number,
+                maxLength: 4,
+                decoration: InputDecoration(
+                  labelText: 'Код подтверждения',
+                  border: OutlineInputBorder(),
+                  errorText: _errorMessage,
                 ),
               ),
-            SizedBox(height: 20),
-            _buildNumberPad(),
-          ],
+              SizedBox(height: 20),
+              if (_isLoading)
+                Center(child: CircularProgressIndicator())
+              else
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _confirmCode,
+                    child: Text('Подтвердить'),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
-    );
-  }
-
-  Widget _buildNumberPad() {
-    return GridView.count(
-      shrinkWrap: true,
-      crossAxisCount: 3,
-      childAspectRatio: 2,
-      mainAxisSpacing: 8,
-      crossAxisSpacing: 8,
-      children: List.generate(9, (index) {
-        return ElevatedButton(
-          onPressed: () {
-            if (_codeController.text.length < 4) {
-              _codeController.text += (index + 1).toString();
-            }
-          },
-          child: Text('${index + 1}'),
-        );
-      })
-        ..addAll([
-          ElevatedButton(
-            onPressed: () {
-              if (_codeController.text.isNotEmpty) {
-                _codeController.text = _codeController.text
-                    .substring(0, _codeController.text.length - 1);
-              }
-            },
-            child: Icon(Icons.backspace),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (_codeController.text.length < 4) {
-                _codeController.text += '0';
-              }
-            },
-            child: Text('0'),
-          ),
-          ElevatedButton(
-            onPressed: _confirmCode,
-            child: Text('OK'),
-          ),
-        ]),
     );
   }
 
