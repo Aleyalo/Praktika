@@ -1,0 +1,4290 @@
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\main.dart
+Content:
+// lib/main.dart
+import 'package:flutter/material.dart';
+import './screens/login_screen.dart'; // Импорт экрана входа
+import './screens/main_screen.dart'; // Импорт главного экрана
+import './services/auth_service.dart'; // Импорт AuthService
+
+void main() {
+  runApp(MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Company App',
+      theme: ThemeData(
+        primarySwatch: Colors.green,
+      ),
+      home: FutureBuilder<bool>(
+        future: _checkCredentials(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Center(child: CircularProgressIndicator());
+          } else if (snapshot.hasData && snapshot.data == true) {
+            return MainScreen();
+          } else {
+            return LoginScreen();
+          }
+        },
+      ),
+    );
+  }
+
+  // Метод для проверки наличия сохраненных учетных данных
+  Future<bool> _checkCredentials() async {
+    final authService = AuthService();
+    final guid = await authService.getGUID();
+    final email = await authService.getEmail();
+    final password = await authService.getPassword();
+    print('Проверка учетных данных: GUID=$guid, Email=$email, Password=$password');
+    return guid != null && guid.isNotEmpty && email != null && email.isNotEmpty && password != null && password.isNotEmpty;
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\models\colleague.dart
+Content:
+class Colleague {
+  final String guid;
+  final String name;
+  bool selected; // Убираем final, чтобы поле было изменяемым
+  final bool auth; // новое поле
+
+  Colleague({
+    required this.guid,
+    required this.name,
+    required this.selected,
+    required this.auth, // добавляем инициализацию
+  });
+
+  factory Colleague.fromJson(Map<String, dynamic> json) {
+    return Colleague(
+      guid: json['guid'] ?? '',
+      name: json['name'] ?? '',
+      selected: json['selected'] ?? false,
+      auth: json['auth'] ?? false, // считываем из JSON
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'guid': guid,
+      'name': name,
+      'selected': selected,
+      'auth': auth, // сохраняем в JSON
+    };
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\models\department.dart
+Content:
+// lib/models/department.dart
+class Department {
+  final String guid;
+  final String name;
+
+  Department({
+    required this.guid,
+    required this.name,
+  });
+
+  factory Department.fromJson(Map<String, dynamic> json) {
+    try {
+      return Department(
+        guid: json['guid'] as String? ?? '', // Явное приведение к String и обработка null
+        name: json['name'] as String? ?? '', // Явное приведение к String и обработка null
+      );
+    } catch (e) {
+      print('Error parsing Department from JSON: $e');
+      print('JSON data: $json');
+      return Department(guid: '', name: '');
+    }
+  }
+
+  @override
+  String toString() {
+    return 'Department{guid: $guid, name: $name}';
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\models\organization.dart
+Content:
+// lib/models/organization.dart
+class Organization {
+  final String guid;
+  final String name;
+
+  Organization({required this.guid, required this.name});
+
+  factory Organization.fromJson(Map<String, dynamic> json) {
+    return Organization(
+      guid: json['guid'] ?? '',
+      name: json['name'] ?? '',
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'guid': guid,
+      'name': name,
+    };
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\colleagues_screen.dart
+Content:
+// lib/screens/colleagues_screen.dart
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../services/colleagues_service.dart';
+import '../services/auth_service.dart';
+import '../services/favorites_service.dart';
+import '../services/departments_service.dart';
+import '../models/colleague.dart';
+import '../models/department.dart';
+import './colleague_card_screen.dart';
+import 'package:collection/collection.dart';
+
+class ColleaguesScreen extends StatefulWidget {
+  @override
+  _ColleaguesScreenState createState() => _ColleaguesScreenState();
+}
+
+class _ColleaguesScreenState extends State<ColleaguesScreen> {
+  ValueNotifier<List<Colleague>> _colleaguesNotifier = ValueNotifier([]);
+  String? _selectedOrganizationGuid;
+  String? _selectedDepartmentGuid;
+  List<Map<String, dynamic>> _userOrganizations = [];
+  List<Department> _departments = [];
+  String? _currentUserId;
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  bool _showOnlyAuthorized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    print('Initializing ColleaguesScreen');
+    _loadFilterSettings();
+    _loadUserOrganizations();
+    _searchController.addListener(_onSearchChanged);
+    _loadDefaultColleagues();
+  }
+
+  Future<void> _loadFilterSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _showOnlyAuthorized = prefs.getBool('show_only_authorized') ?? false;
+    });
+    print('Loaded filter settings: showOnlyAuthorized=$_showOnlyAuthorized');
+  }
+
+  Future<void> _saveFilterSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('show_only_authorized', _showOnlyAuthorized);
+    print('Saved filter settings: showOnlyAuthorized=$_showOnlyAuthorized');
+  }
+
+  @override
+  void dispose() {
+    _searchController.removeListener(_onSearchChanged);
+    _searchController.dispose();
+    _colleaguesNotifier.dispose();
+    super.dispose();
+  }
+
+  void _onSearchChanged() {
+    setState(() {
+      _searchQuery = _searchController.text.toLowerCase();
+    });
+    _updateColleaguesList(_colleaguesNotifier.value);
+  }
+
+  Future<void> _loadUserOrganizations() async {
+    try {
+      print('Loading user data...');
+      final userData = await AuthService().getUserData();
+      print('User data loaded: $userData');
+      final employment = List<Map<String, dynamic>>.from(userData['employment'] ?? []);
+      print('Employment data: $employment');
+      setState(() {
+        _userOrganizations = employment
+            .where((job) => job['organization_guid'] != null && job['organization_guid'].isNotEmpty)
+            .fold<Map<String, Map<String, dynamic>>>({}, (acc, job) {
+          acc[job['organization_guid']] = job;
+          return acc;
+        })
+            .values
+            .toList();
+        print('Unique user organizations: $_userOrganizations');
+        _currentUserId = userData['guid'];
+      });
+    } catch (e) {
+      print('Error loading user organizations: $e');
+    }
+  }
+
+  Future<void> _loadDefaultColleagues() async {
+    print('Loading default colleagues list without params...');
+    try {
+      final service = ColleaguesService();
+      final colleagues = await service.getColleagues();
+      print('Default colleagues fetched: $colleagues');
+      _updateColleaguesList(colleagues);
+    } catch (e) {
+      print('Error loading default colleagues: $e');
+      _colleaguesNotifier.value = [];
+    }
+  }
+
+  Future<void> _loadDepartments(String organizationGuid) async {
+    try {
+      print('Loading departments for organization GUID: $organizationGuid');
+      final service = DepartmentsService();
+      final departments = await service.getDepartments(
+        organizationGuid: organizationGuid,
+      );
+      print('Departments loaded: $departments');
+      if (departments.isEmpty) {
+        print('No departments found for organization: $organizationGuid');
+      }
+      setState(() {
+        _departments = departments;
+        _selectedDepartmentGuid = null;
+      });
+      await _fetchColleagues(organizationGuid, null);
+    } catch (e) {
+      print('Error loading departments: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Ошибка при загрузке подразделений: ${e.toString()}')),
+      );
+    }
+  }
+
+  Future<void> _fetchColleagues(String? organizationGuid, String? departmentGuid) async {
+    try {
+      print('Fetching colleagues for organization GUID: $organizationGuid, department GUID: $departmentGuid');
+      final service = ColleaguesService();
+      final colleagues = await service.getColleagues(
+        organizationGuid: organizationGuid,
+        departmentGuid: departmentGuid,
+      );
+      print('Colleagues fetched: $colleagues');
+      if (_currentUserId == null) {
+        print('Current user ID is null, skipping filter');
+        _updateColleaguesList(colleagues);
+        return;
+      }
+      final filteredColleagues = colleagues.where((colleague) =>
+      colleague.guid != _currentUserId).toList();
+      print('Filtered colleagues before update: $filteredColleagues');
+      _updateColleaguesList(filteredColleagues);
+    } catch (e) {
+      print('Error fetching colleagues: $e');
+      rethrow;
+    }
+  }
+
+  void _resetToDefault() {
+    print('Resetting to default state...');
+    setState(() {
+      _selectedOrganizationGuid = null;
+      _selectedDepartmentGuid = null;
+      _departments = [];
+      _showOnlyAuthorized = false;
+    });
+    _saveFilterSettings();
+    _fetchColleagues(null, null);
+  }
+
+  void _toggleFavorite(Colleague colleague) async {
+    try {
+      final favoritesService = FavoritesService();
+      final isCurrentlySelected = colleague.selected;
+      if (isCurrentlySelected) {
+        await favoritesService.removeFromFavorites(colleague.guid);
+      } else {
+        await favoritesService.addToFavorites(colleague.guid);
+      }
+      setState(() {
+        colleague.selected = !isCurrentlySelected;
+      });
+      _updateColleaguesList(_colleaguesNotifier.value);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Ошибка при изменении состояния избранного')),
+      );
+    }
+  }
+
+  void _updateColleaguesList(List<Colleague> colleagues) {
+    var filteredColleagues = colleagues.where((colleague) =>
+        colleague.name.toLowerCase().contains(_searchQuery)).toList();
+
+    if (_showOnlyAuthorized) {
+      filteredColleagues = filteredColleagues.where((colleague) => colleague.auth).toList();
+    }
+
+    print('Filtered colleagues after search: $filteredColleagues');
+    filteredColleagues.sort((a, b) {
+      if (a.selected && !b.selected) return -1;
+      if (!a.selected && b.selected) return 1;
+      return a.name.compareTo(b.name);
+    });
+    print('Filtered and sorted colleagues: $filteredColleagues');
+    _colleaguesNotifier.value = filteredColleagues;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    print('Building ColleaguesScreen');
+    print('_selectedOrganizationGuid: $_selectedOrganizationGuid');
+    print('_userOrganizations: $_userOrganizations');
+    print('_departments: $_departments');
+    print('_selectedDepartmentGuid: $_selectedDepartmentGuid');
+    print('_showOnlyAuthorized: $_showOnlyAuthorized');
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Коллеги'),
+        backgroundColor: Colors.yellow,
+        actions: [
+          IconButton(
+            icon: Icon(Icons.filter_list),
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (BuildContext context) {
+                  String? newOrgValue = _selectedOrganizationGuid;
+                  String? newDepValue = _selectedDepartmentGuid;
+                  List<Department> dialogDepartments = _departments;
+                  bool showOnlyAuthorized = _showOnlyAuthorized;
+
+                  return StatefulBuilder(
+                    builder: (context, setState) {
+                      return AlertDialog(
+                        title: Text('Фильтр'),
+                        content: SingleChildScrollView(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              DropdownButtonFormField<String>(
+                                value: newOrgValue,
+                                items: _userOrganizations.map((org) {
+                                  final orgGuid = org['organization_guid'] as String;
+                                  final orgName = org['organization_name'] as String;
+                                  return DropdownMenuItem<String>(
+                                    value: orgGuid,
+                                    child: Text(orgName),
+                                  );
+                                }).toList(),
+                                onChanged: (String? value) async {
+                                  if (value == null) {
+                                    setState(() {
+                                      newOrgValue = null;
+                                      newDepValue = null;
+                                      dialogDepartments = [];
+                                    });
+                                    return;
+                                  }
+                                  final service = DepartmentsService();
+                                  final departments = await service.getDepartments(
+                                    organizationGuid: value,
+                                  );
+                                  setState(() {
+                                    newOrgValue = value;
+                                    newDepValue = null;
+                                    dialogDepartments = departments;
+                                  });
+                                },
+                                decoration: InputDecoration(
+                                  labelText: 'Выберите организацию',
+                                ),
+                              ),
+                              SizedBox(height: 16),
+                              if (dialogDepartments.isNotEmpty)
+                                DropdownButtonFormField<String>(
+                                  value: newDepValue,
+                                  items: dialogDepartments.map((dep) {
+                                    print('Adding department to dropdown: ${dep.guid} - ${dep.name}');
+                                    return DropdownMenuItem<String>(
+                                      value: dep.guid,
+                                      child: Text(dep.name),
+                                    );
+                                  }).toList(),
+                                  onChanged: (String? value) {
+                                    setState(() {
+                                      newDepValue = value;
+                                    });
+                                  },
+                                  decoration: InputDecoration(
+                                    labelText: 'Выберите подразделение',
+                                  ),
+                                )
+                              else if (newOrgValue != null)
+                                Text('Нет доступных подразделений'),
+                              SizedBox(height: 16),
+                              ListTile(
+                                title: Text('Только авторизованные'),
+                                trailing: Switch(
+                                  value: showOnlyAuthorized,
+                                  onChanged: (bool value) async {
+                                    setState(() {
+                                      showOnlyAuthorized = value;
+                                    });
+                                    await _saveFilterSettings();
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () {
+                              Navigator.pop(context);
+                            },
+                            child: Text('Отмена'),
+                          ),
+                          TextButton(
+                            onPressed: _resetToDefault,
+                            child: Text('Сбросить'),
+                          ),
+                          ElevatedButton(
+                            onPressed: () async {
+                              Navigator.pop(context);
+                              setState(() {
+                                _selectedOrganizationGuid = newOrgValue;
+                                _selectedDepartmentGuid = newDepValue;
+                                _departments = dialogDepartments;
+                                _showOnlyAuthorized = showOnlyAuthorized;
+                              });
+                              await _saveFilterSettings();
+                              _fetchColleagues(newOrgValue, newDepValue);
+                              print('Updated filters: org=$newOrgValue, dep=$newDepValue, authOnly=$showOnlyAuthorized');
+                            },
+                            child: Text('Применить'),
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                },
+              );
+            },
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                labelText: 'Поиск коллеги',
+                prefixIcon: Icon(Icons.search),
+              ),
+            ),
+          ),
+          Expanded(
+            child: ValueListenableBuilder<List<Colleague>>(
+              valueListenable: _colleaguesNotifier,
+              builder: (context, colleagues, child) {
+                var filteredColleagues = colleagues.where((colleague) =>
+                    colleague.name.toLowerCase().contains(_searchQuery)).toList();
+
+                if (_showOnlyAuthorized) {
+                  filteredColleagues = filteredColleagues.where((colleague) => colleague.auth).toList();
+                }
+
+                print('Filtered colleagues in builder: $filteredColleagues');
+                filteredColleagues.sort((a, b) {
+                  if (a.selected && !b.selected) return -1;
+                  if (!a.selected && b.selected) return 1;
+                  return a.name.compareTo(b.name);
+                });
+                print('Sorted colleagues in builder: $filteredColleagues');
+
+                return filteredColleagues.isEmpty
+                    ? Center(child: Text('Коллег нет'))
+                    : ListView.builder(
+                  itemCount: filteredColleagues.length,
+                  itemBuilder: (context, index) {
+                    final colleague = filteredColleagues[index];
+                    return ListTile(
+                      title: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              colleague.name,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          IconButton(
+                            icon: Icon(
+                              colleague.selected ? Icons.star : Icons.star_border,
+                              color: colleague.selected ? Colors.yellow : Colors.grey,
+                            ),
+                            onPressed: () {
+                              _toggleFavorite(colleague);
+                            },
+                          ),
+                        ],
+                      ),
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ColleagueCardScreen(colleagueGuid: colleague.guid),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\colleague_card_screen.dart
+Content:
+// lib/screens/colleague_card_screen.dart
+import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../services/colleague_card_service.dart';
+import 'dart:convert';
+
+class ColleagueCardScreen extends StatelessWidget {
+  final String colleagueGuid;
+  const ColleagueCardScreen({Key? key, required this.colleagueGuid}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Карточка коллеги'),
+        backgroundColor: Colors.yellow,
+      ),
+      body: FutureBuilder<Map<String, dynamic>>(
+        future: _fetchColleagueData(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Center(child: CircularProgressIndicator());
+          } else if (snapshot.hasError) {
+            return Center(child: Text('Ошибка загрузки данных'));
+          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return Center(child: Text('Данные коллеги недоступны'));
+          } else {
+            final colleagueData = snapshot.data!;
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: CircleAvatar(
+                      radius: 50,
+                      backgroundColor: Colors.grey.shade300,
+                      backgroundImage: colleagueData['photo'] != null && colleagueData['photo'].isNotEmpty
+                          ? MemoryImage(base64Decode(colleagueData['photo']))
+                          : null,
+                      child: colleagueData['photo'] == null || colleagueData['photo'].isEmpty
+                          ? Icon(Icons.person, size: 50, color: Colors.grey.shade700)
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  ProfileField(label: 'ФИО', value: colleagueData['fullName']?.toString() ?? ''),
+                  ProfileField(label: 'Пол', value: colleagueData['gender']?.toString() ?? ''),
+                  ProfileField(label: 'Дата рождения', value: colleagueData['birthday']?.split('T')[0] ?? ''),
+                  ProfileField(label: 'Email', value: colleagueData['email']?.toString() ?? ''),
+                  ProfileField(label: 'Телефон', value: colleagueData['phone']?.toString() ?? ''),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Ссылки',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 10),
+                  if (colleagueData['links'] != null && colleagueData['links'] is Map<String, dynamic>)
+                    ...colleagueData['links'].entries.map((entry) {
+                      return LinkItem(label: entry.key, url: entry.value);
+                    }).toList(),
+                  Text(
+                    'Места работы',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 10),
+                  ...List.generate(
+                    colleagueData['employment'].length,
+                        (index) {
+                      final job = colleagueData['employment'][index];
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${job['organization_name']} - ${job['department_name']} (${job['type']})',
+                            style: TextStyle(fontSize: 16),
+                          ),
+                          Text(
+                            job['post'],
+                            style: TextStyle(fontSize: 14, color: Colors.grey),
+                          ),
+                          SizedBox(height: 10),
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 20),
+                ],
+              ),
+            );
+          }
+        },
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> _fetchColleagueData() async {
+    try {
+      final service = ColleagueCardService();
+      return await service.getColleagueCard(guidCollegue: colleagueGuid);
+    } catch (e) {
+      print('Ошибка при загрузке данных коллеги: $e');
+      return {};
+    }
+  }
+}
+
+class ProfileField extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const ProfileField({Key? key, required this.label, required this.value}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text('$label:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ),
+          Text(value, style: TextStyle(fontSize: 16)),
+        ],
+      ),
+    );
+  }
+}
+
+class LinkItem extends StatelessWidget {
+  final String label;
+  final String url;
+
+  const LinkItem({Key? key, required this.label, required this.url}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text('$label:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ),
+          GestureDetector(
+            onTap: () => _launchUrl(context, label, url),
+            child: Text(
+              url,
+              style: TextStyle(fontSize: 16, color: Colors.blue, decoration: TextDecoration.underline),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _launchUrl(BuildContext context, String label, String url) async {
+    if (url.isEmpty || url == label || url == '1') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Нет доступной ссылки для $label')),
+      );
+      return;
+    }
+
+    Uri? uri;
+
+    if (label.toLowerCase() == 'vk' && !url.startsWith('http')) {
+      uri = Uri.parse('https://vk.com/$url');
+    } else if (label.toLowerCase() == 'telegram' && !url.startsWith('tg://')) {
+      uri = Uri.parse('tg://resolve?domain=$url');
+    } else if (label.toLowerCase() == 'whatsapp' && !url.startsWith('https')) {
+      uri = Uri.parse('https://wa.me/$url');
+    } else if (url.startsWith('www.') || url.contains('.com') || url.contains('.ru')) {
+      uri = Uri.parse('https://$url');
+    } else {
+      uri = Uri.tryParse(url);
+    }
+
+    if (uri != null && await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      final fallbackUri = uri ?? Uri.parse('https://$url');
+      if (await canLaunchUrl(fallbackUri)) {
+        await launchUrl(fallbackUri, mode: LaunchMode.externalApplication);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Не удалось открыть ссылку')),
+        );
+      }
+    }
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\confirm_phone_screen.dart
+Content:
+import 'package:flutter/material.dart';
+import '../services/phone_edit_service.dart';
+
+class ConfirmPhoneScreen extends StatefulWidget {
+  final String newPhone;
+  const ConfirmPhoneScreen({Key? key, required this.newPhone}) : super(key: key);
+
+  @override
+  _ConfirmPhoneScreenState createState() => _ConfirmPhoneScreenState();
+}
+
+class _ConfirmPhoneScreenState extends State<ConfirmPhoneScreen> {
+  final _codeController = TextEditingController();
+  bool _isLoading = false;
+  String _errorMessage = '';
+
+  Future<void> _confirmCode() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = '';
+    });
+
+    try {
+      final result = await PhoneEditService.editPhoneNumber(
+        newPhone: widget.newPhone,
+        step: 2,
+      );
+
+      if (result['success'] == true) {
+        Navigator.pop(context, true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Номер телефона успешно изменен')),
+        );
+      } else {
+        setState(() {
+          _errorMessage = result['error'] ?? 'Ошибка подтверждения номера';
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Произошла ошибка: $e';
+      });
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Подтверждение номера')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'На указанный номер будет совершен звонок. Введите последние 4 цифры номера, с которого поступил звонок:',
+              style: TextStyle(fontSize: 16),
+            ),
+            SizedBox(height: 20),
+            TextField(
+              controller: _codeController,
+              keyboardType: TextInputType.number,
+              maxLength: 4,
+              decoration: InputDecoration(
+                labelText: 'Код подтверждения',
+                border: OutlineInputBorder(),
+                errorText: _errorMessage,
+              ),
+            ),
+            SizedBox(height: 20),
+            if (_isLoading)
+              Center(child: CircularProgressIndicator())
+            else
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _confirmCode,
+                  child: Text('Подтвердить'),
+                ),
+              ),
+            SizedBox(height: 20),
+            _buildNumberPad(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNumberPad() {
+    return GridView.count(
+      shrinkWrap: true,
+      crossAxisCount: 3,
+      childAspectRatio: 2,
+      mainAxisSpacing: 8,
+      crossAxisSpacing: 8,
+      children: List.generate(9, (index) {
+        return ElevatedButton(
+          onPressed: () {
+            if (_codeController.text.length < 4) {
+              _codeController.text += (index + 1).toString();
+            }
+          },
+          child: Text('${index + 1}'),
+        );
+      })
+        ..addAll([
+          ElevatedButton(
+            onPressed: () {
+              if (_codeController.text.isNotEmpty) {
+                _codeController.text = _codeController.text
+                    .substring(0, _codeController.text.length - 1);
+              }
+            },
+            child: Icon(Icons.backspace),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (_codeController.text.length < 4) {
+                _codeController.text += '0';
+              }
+            },
+            child: Text('0'),
+          ),
+          ElevatedButton(
+            onPressed: _confirmCode,
+            child: Text('OK'),
+          ),
+        ]),
+    );
+  }
+
+  @override
+  void dispose() {
+    _codeController.dispose();
+    super.dispose();
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\documents_screen.dart
+Content:
+import 'package:flutter/material.dart';
+
+class DocumentsScreen extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Документы'), backgroundColor: Colors.yellow),
+      body: Center(
+        child: ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+          onPressed: () {},
+          child: Text('Добавить документ'),
+        ),
+      ),
+    );
+  }
+}
+
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\edit_profile_screen.dart
+Content:
+// lib/screens/edit_profile_screen.dart
+import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'dart:convert';
+import 'dart:io';
+import '../services/profile_edit_service.dart';
+import '../services/phone_edit_service.dart';
+import '../services/auth_service.dart';
+import '../../utils/constants.dart';
+import 'confirm_phone_screen.dart';
+import 'package:flutter/services.dart';
+
+class EditProfileScreen extends StatefulWidget {
+  @override
+  _EditProfileScreenState createState() => _EditProfileScreenState();
+}
+
+class _EditProfileScreenState extends State<EditProfileScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _emailController = TextEditingController();
+  final _vkController = TextEditingController();
+  final _telegramController = TextEditingController();
+  final _whatsappController = TextEditingController();
+  final _phoneController = TextEditingController();
+  String? _initialPhone;
+
+  String? _photoBase64;
+  final picker = ImagePicker();
+
+  static const int _maxImageSizeInBytes = 2 * 1024 * 1024;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInitialData();
+  }
+
+  Future<void> _loadInitialData() async {
+    try {
+      final userData = await AuthService().getUserData();
+      setState(() {
+        _emailController.text = userData['email'] ?? '';
+        _vkController.text = userData['links']?['VK'] ?? '';
+        _telegramController.text = userData['links']?['Telegram'] ?? '';
+        _whatsappController.text = userData['links']?['WhatsApp'] ?? '';
+        _phoneController.text = userData['phone'] ?? '';
+        _initialPhone = userData['phone'] ?? '';
+      });
+    } catch (e) {
+      print('Ошибка при загрузке данных пользователя: $e');
+    }
+  }
+
+  Future<void> _pickImage() async {
+    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile != null) {
+      final file = File(pickedFile.path);
+      final size = await file.length();
+
+      if (size > _maxImageSizeInBytes) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Фото слишком большое. Максимум 2 МБ.')),
+        );
+        return;
+      }
+
+      setState(() {
+        _photoBase64 = base64Encode(file.readAsBytesSync());
+      });
+    }
+  }
+
+  Future<void> _saveProfile() async {
+    if (_formKey.currentState?.validate() ?? false) {
+      bool confirmed = await _showConfirmDialog(context);
+      if (confirmed) {
+        try {
+          final result = await ProfileEditService.editProfile(
+            email: _emailController.text,
+            links: {
+              if (_vkController.text.isNotEmpty) 'VK': _vkController.text,
+              if (_telegramController.text.isNotEmpty) 'Telegram': _telegramController.text,
+              if (_whatsappController.text.isNotEmpty) 'WhatsApp': _whatsappController.text,
+            },
+            photoBase64: _photoBase64,
+          );
+
+          if (result['success'] == true) {
+            ScaffoldMessenger.of(context)
+                .showSnackBar(SnackBar(content: Text('Профиль успешно обновлён')));
+            Navigator.pop(context);
+          } else {
+            final errorMessage = result['error'].toString().toLowerCase();
+            if (errorMessage.contains('payload too large') || errorMessage.contains('413')) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text('Ошибка: Фото слишком большое или запрос превысил допустимый размер')));
+            } else {
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(SnackBar(content: Text('Ошибка: ${result['error']}')));
+            }
+          }
+        } catch (e) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Произошла ошибка: $e')),
+          );
+        }
+      }
+    }
+  }
+
+  Future<bool> _showConfirmDialog(BuildContext context) async {
+    return await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Подтвердите'),
+        content: Text('Вы действительно хотите сохранить изменения?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text('Нет'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop(true);
+            },
+            child: Text('Да'),
+          ),
+        ],
+      ),
+    ) ??
+        false;
+  }
+
+  String? _validateEmail(String? value) {
+    if (value == null || value.isEmpty) return null;
+
+    final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+    if (!emailRegex.hasMatch(value)) {
+      return 'Введите корректный email';
+    }
+    return null;
+  }
+
+  String? _validateLink(String? value, String platform) {
+    if (value == null || value.isEmpty) return null;
+
+    switch (platform) {
+      case 'VK':
+        final vkRegex = RegExp(r'^(https?:\/\/)?(www\.)?vk\.com\/[\w\.\-_%]+$', caseSensitive: false);
+        if (!vkRegex.hasMatch(value)) {
+          return 'Введите корректную ссылку на VK';
+        }
+        break;
+      case 'Telegram':
+        final tgRegex = RegExp(r'^(https?:\/\/)?(www\.)?t\.me\/[\w\.\-_%]+$', caseSensitive: false);
+        if (!tgRegex.hasMatch(value)) {
+          return 'Введите корректную ссылку на Telegram';
+        }
+        break;
+      case 'WhatsApp':
+        final waRegex = RegExp(r'^(https?:\/\/)?(www\.)?wa\.me\/[\d\.\-_%]+$', caseSensitive: false);
+        if (!waRegex.hasMatch(value)) {
+          return 'Введите корректную ссылку на WhatsApp';
+        }
+        break;
+    }
+
+    return null;
+  }
+
+  String? _validatePhone(String? value) {
+    if (value == null || value.isEmpty) return null;
+
+    final phoneRegex = RegExp(r'^[0-9]+$');
+    if (!phoneRegex.hasMatch(value)) {
+      return 'Введите корректный номер телефона (только цифры)';
+    }
+    return null;
+  }
+
+  Future<void> _changePhoneNumber() async {
+    final currentPhone = _phoneController.text.trim();
+    if (currentPhone.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Введите новый номер телефона')),
+      );
+      return;
+    }
+
+    if (currentPhone == _initialPhone) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Новый номер не отличается от текущего.')),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Подтвердите действие'),
+          content: Text('Вы действительно хотите изменить номер телефона?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text('Отмена'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text('Да'),
+            ),
+          ],
+        );
+      },
+    ) ?? false;
+
+    if (!confirmed) return;
+
+    try {
+      final result = await PhoneEditService.editPhoneNumber(
+        newPhone: currentPhone,
+        step: 1,
+      );
+
+      if (result['success'] == true) {
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ConfirmPhoneScreen(newPhone: currentPhone),
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Ошибка: ${result['error']}')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Произошла ошибка: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Редактировать профиль')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            children: [
+              TextFormField(
+                controller: _emailController,
+                decoration: InputDecoration(labelText: 'Email'),
+                validator: _validateEmail,
+              ),
+              SizedBox(height: 16),
+
+              TextFormField(
+                controller: _vkController,
+                decoration: InputDecoration(labelText: 'Ссылка на VK'),
+                validator: (value) => _validateLink(value, 'VK'),
+              ),
+              SizedBox(height: 16),
+
+              TextFormField(
+                controller: _telegramController,
+                decoration: InputDecoration(labelText: 'Ссылка на Telegram'),
+                validator: (value) => _validateLink(value, 'Telegram'),
+              ),
+              SizedBox(height: 16),
+
+              TextFormField(
+                controller: _whatsappController,
+                decoration: InputDecoration(labelText: 'Ссылка на WhatsApp'),
+                validator: (value) => _validateLink(value, 'WhatsApp'),
+              ),
+              SizedBox(height: 16),
+
+              ElevatedButton.icon(
+                onPressed: _pickImage,
+                icon: Icon(Icons.photo_library),
+                label: Text('Выбрать фото'),
+              ),
+
+              if (_photoBase64 != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16.0),
+                  child: Container(
+                    height: 150,
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[300],
+                      borderRadius: BorderRadius.circular(8),
+                      image: DecorationImage(
+                        image: MemoryImage(base64Decode(_photoBase64!)),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                ),
+
+              SizedBox(height: 24),
+
+              ElevatedButton.icon(
+                onPressed: _saveProfile,
+                icon: Icon(Icons.save),
+                label: Text('Сохранить'),
+              ),
+              SizedBox(height: 16),
+
+              TextFormField(
+                controller: _phoneController,
+                decoration: InputDecoration(labelText: 'Номер телефона'),
+                keyboardType: TextInputType.phone,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                validator: _validatePhone,
+              ),
+              SizedBox(height: 16),
+
+              ElevatedButton.icon(
+                onPressed: _changePhoneNumber,
+                icon: Icon(Icons.phone),
+                label: Text('Изменить номер телефона'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\forgot_password_screen.dart
+Content:
+import 'package:flutter/material.dart';
+
+class ForgotPasswordPage extends StatefulWidget {
+  const ForgotPasswordPage({super.key});
+
+  @override
+  State<ForgotPasswordPage> createState() => _ForgotPasswordPageState();
+}
+
+class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
+  final _emailController = TextEditingController();
+
+  void _sendResetEmail() {
+    final email = _emailController.text;
+    if (email.isNotEmpty && email.contains('@')) {
+      // Пока просто SnackBar, здесь потом можно подключить Firebase или API
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Код отправлен SMS')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Введите корректный номер телефона')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Забыли пароль')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text(
+              'Введите ваш номер телефона для восстановления доступа:',
+              style: TextStyle(fontSize: 18),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _emailController,
+              decoration: const InputDecoration(
+                labelText: 'Номер',
+                border: OutlineInputBorder(),
+              ),
+              keyboardType: TextInputType.emailAddress,
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: _sendResetEmail,
+              child: const Text('Отправить SMS'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\login_screen.dart
+Content:
+// lib/screens/login_screen.dart
+import 'package:flutter/material.dart';
+import '../services/auth_service.dart';
+import '../screens/main_screen.dart';
+import '../screens/registration_screen.dart';
+import 'forgot_password_screen.dart';
+
+class LoginScreen extends StatefulWidget {
+  @override
+  _LoginScreenState createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+
+  Future<void> _loginUser(BuildContext context) async {
+    String email = _emailController.text.trim();
+    String password = _passwordController.text.trim();
+    if (email.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Пожалуйста, заполните все поля')),
+      );
+      return;
+    }
+    try {
+      bool isLoggedIn = await AuthService().login(email, password, context);
+      if (isLoggedIn) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => MainScreen()),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Неверный логин или пароль')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Произошла ошибка: $e')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Padding(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              'Добро пожаловать!',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 20),
+            TextField(
+              controller: _emailController,
+              decoration: InputDecoration(labelText: 'Login/СНИЛС/Телефон'),
+            ),
+            SizedBox(height: 10),
+            TextField(
+              controller: _passwordController,
+              decoration: InputDecoration(labelText: 'Пароль'),
+              obscureText: true,
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+              onPressed: () => _loginUser(context),
+              child: Text('Войти'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => RegistrationScreen()),
+                );
+              },
+              child: Text('Зарегистрироваться'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => ForgotPasswordPage()),
+                );
+              },
+              child: Text(
+                'Забыли пароль?',
+                style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\main_screen.dart
+Content:
+// lib/screens/main_screen.dart
+import 'package:flutter/material.dart';
+import '../screens/services_screen.dart';
+import '../screens/colleagues_screen.dart';
+import '../screens/news_screen.dart';
+import '../screens/documents_screen.dart';
+import '../screens/profile_screen.dart';
+import '../services/auth_service.dart';
+import '../screens/login_screen.dart'; // Импортируем LoginScreen
+
+class MainScreen extends StatefulWidget {
+  @override
+  _MainScreenState createState() => _MainScreenState();
+}
+
+class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
+  int _currentIndex = 0;
+  late Map<String, dynamic> _user;
+  late List<Widget> _screens; // Инициализируем _screens сразу
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this); // Добавляем наблюдатель
+    _initializeScreens(); // Инициализируем _screens сразу
+    _loadUserData();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this); // Удаляем наблюдатель
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      // Выполняем повторную авторизацию при возвращении в приложение
+      _reauthorize();
+    }
+  }
+
+  Future<void> _reauthorize() async {
+    final authService = AuthService();
+    final isLoggedIn = await authService.reauthorizeByGuid();
+    if (!isLoggedIn) {
+      // Если повторная авторизация не удалась, выходим из приложения
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => LoginScreen()),
+            (route) => false,
+      );
+    }
+  }
+
+  Future<void> _loadUserData() async {
+    try {
+      print('Загрузка данных пользователя...');
+      final user = await AuthService().getUserData();
+      if (user.isEmpty) {
+        print('Данные пользователя отсутствуют.');
+      } else {
+        print('Данные пользователя успешно загружены: $user');
+      }
+      setState(() {
+        _user = user;
+        _screens[4] = ProfileScreen(user: _user); // Обновляем профильный экран с новыми данными пользователя
+      });
+    } catch (e) {
+      print('Ошибка при загрузке данных пользователя: $e');
+    }
+  }
+
+  void _initializeScreens() {
+    _screens = [
+      ServicesScreen(),
+      ColleaguesScreen(),
+      NewsScreen(),
+      DocumentsScreen(),
+      ProfileScreen(user: {}), // Инициализируем с пустыми данными пользователя
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: _screens[_currentIndex],
+      bottomNavigationBar: BottomNavigationBar(
+        selectedItemColor: Colors.black,
+        unselectedItemColor: Colors.grey,
+        backgroundColor: Colors.yellow,
+        currentIndex: _currentIndex,
+        onTap: (index) {
+          print('Переключение экрана на индекс: $index');
+          setState(() {
+            _currentIndex = index;
+          });
+        },
+        items: [
+          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Главная'),
+          BottomNavigationBarItem(icon: Icon(Icons.people), label: 'Коллеги'),
+          BottomNavigationBarItem(icon: Icon(Icons.article), label: 'Новости'),
+          BottomNavigationBarItem(icon: Icon(Icons.folder), label: 'Документы'),
+          BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Профиль'),
+        ],
+      ),
+    );
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\news_detail_screen.dart
+Content:
+// lib/screens/news_detail_screen.dart
+
+import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/gestures.dart';
+
+class NewsDetailScreen extends StatelessWidget {
+  final Map<String, dynamic> news;
+
+  const NewsDetailScreen({required this.news});
+
+  // Функция для открытия ссылок
+  Future<void> _launchUrl(String url) async {
+    if (await canLaunchUrl(Uri.parse(url))) {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } else {
+      throw 'Could not launch $url';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Новость'),
+        backgroundColor: Colors.yellow,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Заголовок новости
+            Text(
+              news['title'] ?? 'Без заголовка',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 10),
+
+            // Изображение новости (если есть)
+            if (news['img'] != null && news['img'].isNotEmpty)
+              Image.network(
+                news['img'],
+                height: 200,
+                width: double.infinity,
+                fit: BoxFit.cover,
+              ),
+            SizedBox(height: 10),
+
+            // Полный текст новости с поддержкой гиперссылок
+            RichText(
+              text: TextSpan(
+                style: TextStyle(color: Colors.black), // Установите базовый цвет текста
+                children: _parseHtml(news['text'] ?? ''),
+              ),
+            ),
+            SizedBox(height: 10),
+
+            // Дата публикации
+            Text(
+              'Дата: ${news['date']?.split('T')[0] ?? 'Неизвестно'}',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Функция для парсинга HTML и создания TextSpan с гиперссылками
+  List<TextSpan> _parseHtml(String html) {
+    final spans = <TextSpan>[];
+    final words = html.split(' ');
+
+    for (final word in words) {
+      if (word.startsWith('http://') || word.startsWith('https://')) {
+        final tapGesture = TapGestureRecognizer()
+          ..onTap = () => _launchUrl(word);
+
+        spans.add(
+          TextSpan(
+            text: word,
+            style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline),
+            recognizer: tapGesture,
+          ),
+        );
+      } else {
+        spans.add(TextSpan(text: '$word ', style: TextStyle(color: Colors.black)));
+      }
+    }
+
+    return spans;
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\news_screen.dart
+Content:
+// lib/screens/news_screen.dart
+import 'package:flutter/material.dart';
+import '../services//news_service.dart';
+import 'news_detail_screen.dart';
+
+class NewsScreen extends StatefulWidget {
+  @override
+  _NewsScreenState createState() => _NewsScreenState();
+}
+
+class _NewsScreenState extends State<NewsScreen> {
+  late Future<List<Map<String, dynamic>>> _fetchNewsFuture;
+  List<Map<String, dynamic>>? _allNews; // Хранилище для всех новостей
+  bool _isShowingAllNews = false; // Флаг для отображения всех новостей
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchNewsFuture = _fetchNewsData();
+  }
+
+  // Метод для получения списка новостей
+  Future<List<Map<String, dynamic>>> _fetchNewsData() async {
+    try {
+      final newsService = NewsService();
+      final newsList = await newsService.getNews(limit: 50, offset: 0);
+      if (newsList is! List) {
+        throw Exception('Некорректный формат данных: новости не являются списком');
+      }
+      // Сортируем новости по дате в обратном порядке (самые свежие сверху)
+      newsList.sort((a, b) => DateTime.parse(b['date']).compareTo(DateTime.parse(a['date'])));
+      setState(() {
+        _allNews = newsList; // Сохраняем все новости
+      });
+      return newsList;
+    } catch (e) {
+      print('Ошибка при загрузке новостей: $e');
+      return [];
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Новости'),
+        backgroundColor: Colors.yellow,
+      ),
+      body: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _fetchNewsFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Center(child: CircularProgressIndicator());
+          } else if (snapshot.hasError) {
+            return Center(child: Text('Произошла ошибка: ${snapshot.error}'));
+          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return Center(child: Text('Нет новостей'));
+          } else {
+            final newsList = snapshot.data!;
+            final visibleNews = _isShowingAllNews ? newsList : newsList.take(3).toList();
+            return ListView.builder(
+              itemCount: visibleNews.length + (_isShowingAllNews ? 0 : 1), // Добавляем кнопку "Показать все"
+              itemBuilder: (context, index) {
+                if (index < visibleNews.length) {
+                  final news = visibleNews[index];
+                  return Card(
+                    margin: EdgeInsets.symmetric(vertical: 5, horizontal: 10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Text(
+                            news['title'] ?? 'Без заголовка',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        if (news['img'] != null && news['img'].isNotEmpty)
+                          Image.network(
+                            news['img'],
+                            height: 200,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                          ),
+                        Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Text(
+                            news['text']?.substring(0, news['text'].length > 100 ? 100 : news['text'].length) ??
+                                'Без описания',
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 3,
+                            style: TextStyle(fontSize: 14),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(left: 8.0, bottom: 8.0),
+                          child: Text(
+                            'Дата: ${news['date']?.split('T')[0] ?? 'Неизвестно'}',
+                            style: TextStyle(fontSize: 12, color: Colors.grey),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => NewsDetailScreen(news: news),
+                                  ),
+                                );
+                              },
+                              child: Text('Читать далее', style: TextStyle(color: Colors.blue)),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                } else {
+                  // Кнопка "Показать все"
+                  return Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: ElevatedButton(
+                      onPressed: () {
+                        setState(() {
+                          _isShowingAllNews = true; // Показываем все новости
+                        });
+                      },
+                      child: Text('Показать все'),
+                    ),
+                  );
+                }
+              },
+            );
+          }
+        },
+      ),
+    );
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\privacy_settings_screen.dart
+Content:
+// lib/screens/privacy_settings_screen.dart
+import 'package:flutter/material.dart';
+import '../services/privacy_service.dart';
+import '../utils/error_handler.dart';
+import 'package:collection/collection.dart';
+class PrivacySettingsScreen extends StatefulWidget {
+  @override
+  _PrivacySettingsScreenState createState() => _PrivacySettingsScreenState();
+}
+
+class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
+  late Future<Map<String, bool>> _settingsFuture;
+  late Map<String, bool> _currentSettings;
+  late Map<String, bool> _editedSettings;
+
+  @override
+  void initState() {
+    super.initState();
+    _settingsFuture = _fetchPrivacySettings().then((settings) {
+      setState(() {
+        _currentSettings = settings;
+        _editedSettings = Map.from(settings);
+      });
+      return settings;
+    });
+  }
+
+  Future<Map<String, bool>> _fetchPrivacySettings() async {
+    try {
+      final settings = await PrivacyService().getPrivacySettings();
+      return settings;
+    } catch (e) {
+      handleError(context, e.toString());
+      return {};
+    }
+  }
+
+  Future<void> _saveSettings() async {
+    // Сравниваем значения вручную
+    bool settingsEqual = MapEquality().equals(_currentSettings, _editedSettings);
+
+    if (settingsEqual) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Настройки не изменились')),
+      );
+      return;
+    }
+
+    try {
+      final success = await PrivacyService().updatePrivacySettings(_editedSettings);
+      if (success) {
+        setState(() {
+          _currentSettings = Map.from(_editedSettings);
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Настройки сохранены')),
+        );
+      } else {
+        throw Exception('Не удалось сохранить настройки');
+      }
+    } catch (e) {
+      handleError(context, e.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Приватность'), backgroundColor: Colors.yellow),
+      body: FutureBuilder(
+        future: _settingsFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Center(child: CircularProgressIndicator());
+          } else if (snapshot.hasError) {
+            return Center(child: Text('Ошибка загрузки'));
+          } else {
+            return Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildSettingTile("Скрыть дату рождения", "birthday"),
+                  _buildSettingTile("Скрыть номер телефона", "number"),
+                  _buildSettingTile("Скрыть почту", "mail"),
+                  _buildSettingTile("Скрыть ссылки", "links"),
+
+                  // Кнопка "Сохранить" — справа, на уровне других пунктов
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        minimumSize: Size(100, 40),
+                      ),
+                      onPressed: _saveSettings,
+                      child: Text("Сохранить"),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+        },
+      ),
+    );
+  }
+
+  Widget _buildSettingTile(String label, String key) {
+    return ListTile(
+      title: Text(label),
+      trailing: Switch(
+        value: _editedSettings[key] ?? false,
+        onChanged: (value) {
+          setState(() {
+            _editedSettings[key] = value;
+          });
+        },
+      ),
+    );
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\profile_screen.dart
+Content:
+// lib/screens/profile_screen.dart
+import 'package:flutter/material.dart';
+import '../services/auth_service.dart';
+import '../services/profile_service.dart';
+import 'dart:convert';
+import 'dart:typed_data';
+import 'package:url_launcher/url_launcher.dart';
+
+class ProfileScreen extends StatefulWidget {
+  final Map<String, dynamic> user;
+  const ProfileScreen({Key? key, required this.user}) : super(key: key);
+
+  @override
+  _ProfileScreenState createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  late Future<Map<String, dynamic>> _profileFuture;
+
+  Future<Map<String, dynamic>> _fetchProfileData() async {
+    try {
+      print('Fetching profile data...');
+      final authService = AuthService();
+      final userData = await authService.getUserData();
+      print('User data from auth service: $userData');
+      final profileService = ProfileService();
+      final profileData = await profileService.getProfile();
+      print('Profile data from profile service: $profileData');
+
+      // Find main job
+      final employment = List<Map<String, dynamic>>.from(userData['employment'] ?? []);
+      print('Employment data: $employment');
+      Map<String, dynamic> mainJob = {};
+      try {
+        mainJob = employment.firstWhere(
+              (job) => job['type'] == 'Основное место работы',
+          orElse: () => {},
+        );
+      } catch (e) {
+        print('Error finding main job: $e');
+      }
+
+      // Combine data with priority to profile data
+      final combinedData = {
+        ...userData,
+        ...profileData,
+        'fullName': profileData['fullName'] ??
+            '${userData['surname']} ${userData['name']} ${userData['patronymic']}'.trim(),
+        'position': mainJob['post'] ?? '',
+        'organization': mainJob['organization_name'] ?? '',
+        'department': mainJob['department_name'] ?? '',
+        'mainJob': mainJob,
+      };
+      print('Combined profile data: $combinedData');
+      return combinedData;
+    } catch (e) {
+      print('Error fetching profile data: $e');
+      return widget.user;
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _profileFuture = _fetchProfileData();
+  }
+
+  Future<void> _launchUrl(String label, String url) async {
+    if (url.isEmpty || url == label || url == '1') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Нет доступной ссылки для $label')),
+      );
+      return;
+    }
+
+    Uri? uri;
+
+    // Автоматическое определение типа ссылки и её коррекция
+    if (label.toLowerCase() == 'vk' && !url.startsWith('http')) {
+      uri = Uri.parse('https://vk.com/$url');
+    } else if (label.toLowerCase() == 'telegram' && !url.startsWith('tg://')) {
+      uri = Uri.parse('tg://resolve?domain=$url');
+    } else if (label.toLowerCase() == 'whatsapp' && !url.startsWith('https')) {
+      uri = Uri.parse('https://wa.me/$url');
+    } else if (url.startsWith('www.') || url.contains('.com') || url.contains('.ru')) {
+      uri = Uri.parse('https://$url');
+    } else {
+      uri = Uri.tryParse(url);
+    }
+
+    if (uri != null && await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      final fallbackUri = uri ?? Uri.parse('https://$url');
+      if (await canLaunchUrl(fallbackUri)) {
+        await launchUrl(fallbackUri, mode: LaunchMode.externalApplication);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Не удалось открыть ссылку')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Профиль'), backgroundColor: Colors.yellow),
+      body: FutureBuilder<Map<String, dynamic>>(
+        future: _profileFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Center(child: CircularProgressIndicator());
+          } else if (snapshot.hasError) {
+            return Center(child: Text('Ошибка загрузки данных: ${snapshot.error}'));
+          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return Center(child: Text('Данные пользователя недоступны'));
+          } else {
+            final userData = snapshot.data!;
+            print('Building profile with data: $userData');
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: CircleAvatar(
+                      radius: 50,
+                      backgroundColor: Colors.grey.shade300,
+                      backgroundImage: userData['photo'] != null && userData['photo'].isNotEmpty
+                          ? MemoryImage(base64Decode(userData['photo']))
+                          : null,
+                      child: userData['photo'] == null || userData['photo'].isEmpty
+                          ? Icon(Icons.person, size: 50, color: Colors.grey.shade700)
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  ProfileField(label: 'ФИО', value: userData['fullName']?.toString() ?? ''),
+                  ProfileField(label: 'Пол', value: userData['gender']?.toString() ?? ''),
+                  ProfileField(label: 'Дата рождения', value: userData['birthday']?.split('T')[0] ?? ''),
+                  if (userData['email']?.toString().isNotEmpty == true)
+                    ProfileField(label: 'Email', value: userData['email']?.toString() ?? ''),
+                  if (userData['phone']?.toString().isNotEmpty == true)
+                    ProfileField(label: 'Телефон', value: userData['phone']?.toString() ?? ''),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Основное место работы',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  ProfileField(
+                    label: 'Организация',
+                    value: userData['organization']?.toString() ?? 'Не указано',
+                  ),
+                  ProfileField(
+                    label: 'Подразделение',
+                    value: userData['department']?.toString() ?? 'Не указано',
+                  ),
+                  ProfileField(
+                    label: 'Должность',
+                    value: userData['position']?.toString() ?? 'Не указано',
+                  ),
+                  const SizedBox(height: 20),
+                  if (userData['links'] != null && userData['links'] is Map<String, dynamic>)
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Ссылки',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 10),
+                        ...userData['links'].entries.map((entry) =>
+                            ProfileLink(label: entry.key, url: entry.value, launchUrl: (l, u) => _launchUrl(l, u))).toList(),
+                      ],
+                    ),
+                ],
+              ),
+            );
+          }
+        },
+      ),
+    );
+  }
+}
+
+class ProfileField extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const ProfileField({Key? key, required this.label, required this.value}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 2,
+            child: Text('$label:',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ),
+          Expanded(
+            flex: 3,
+            child: Text(value, style: TextStyle(fontSize: 16)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class ProfileLink extends StatelessWidget {
+  final String label;
+  final String url;
+  final Function(String, String) launchUrl;
+
+  const ProfileLink({
+    Key? key,
+    required this.label,
+    required this.url,
+    required this.launchUrl,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 2,
+            child: Text('$label:',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ),
+          Expanded(
+            flex: 3,
+            child: GestureDetector(
+              onTap: () => launchUrl(label, url),
+              child: Text(
+                url,
+                style: TextStyle(fontSize: 16, color: Colors.blue, decoration: TextDecoration.underline),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\qr_code_screen.dart
+Content:
+// lib/screens/qr_code_screen.dart
+import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import '../services/auth_service.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
+class QrCodeScreen extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('QR-код'),
+        backgroundColor: Colors.yellow,
+      ),
+      body: FutureBuilder<Map<String, dynamic>>(
+        future: _getUserData(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Center(child: CircularProgressIndicator());
+          } else if (snapshot.hasError) {
+            return Center(child: Text('Ошибка загрузки данных'));
+          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return Center(child: Text('Данные пользователя недоступны'));
+          } else {
+            final userData = snapshot.data!;
+            final qrData = _generateQrData(userData);
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  QrImageView(
+                    data: qrData,
+                    version: QrVersions.auto,
+                    size: 250,
+                    backgroundColor: Colors.white,
+                  ),
+                  SizedBox(height: 20),
+                  Text(
+                    'ФИО: ${userData['fullName']}', // Используем fullName из данных пользователя
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 16),
+                  ),
+                  Text(
+                    'Пол: ${userData['gender']}',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 16),
+                  ),
+                  Text(
+                    'Дата рождения: ${userData['birthday'].split('T')[0]}',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 16),
+                  ),
+                ],
+              ),
+            );
+          }
+        },
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> _getUserData() async {
+    try {
+      final authService = AuthService();
+      final guid = await authService.getGUID();
+      if (guid == null || guid.isEmpty) {
+        throw Exception('GUID не найден');
+      }
+
+      final uri = Uri(
+        scheme: 'https',
+        host: 'mw.azs-topline.ru',
+        port: 44445,
+        path: '/hrm/hs/ewp/getQR',
+      );
+
+      final response = await http.get(
+        uri,
+        headers: {
+          ...AuthService.baseHeaders,
+          'ma-guid': guid,
+        },
+      ).timeout(Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        print('Ответ сервера: $json');
+
+        if (json['success'] == true && json['data'] != null) {
+          final userData = json['data'];
+          print('Полученные данные пользователя из ответа сервера: $userData');
+
+          // Добавляем fullName для удобства отображения
+          userData['fullName'] = '${userData['lastName'] ?? ''} ${userData['firstName'] ?? ''} ${userData['patronymic'] ?? ''}'.trim();
+
+          return userData;
+        } else {
+          throw Exception(json['error'] ?? 'Неизвестная ошибка');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при загрузке данных пользователя: $e');
+      return {};
+    }
+  }
+
+  String _generateQrData(Map<String, dynamic> userData) {
+    return jsonEncode({
+      'firstName': userData['firstName'] ?? '',
+      'lastName': userData['lastName'] ?? '',
+      'patronymic': userData['patronymic'] ?? '',
+      'gender': userData['gender'] ?? '',
+      'birthday': userData['birthday'] ?? '',
+      'snils': userData['snils'] ?? '',
+    });
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\registration_screen.dart
+Content:
+// lib/screens/registration_screen.dart
+import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
+import '../services/moderation_service.dart'; // Импортируем ModerationService
+import '../utils/error_handler.dart'; // Для обработки ошибок
+import 'package:url_launcher/url_launcher.dart'; // Для работы с ссылками
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+class RegistrationScreen extends StatefulWidget {
+  @override
+  _RegistrationScreenState createState() => _RegistrationScreenState();
+}
+
+class _RegistrationScreenState extends State<RegistrationScreen> {
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _surnameController = TextEditingController();
+  final TextEditingController _patronymicController = TextEditingController();
+  final TextEditingController _birthdateController = TextEditingController();
+  final TextEditingController _snilsController = TextEditingController();
+  final TextEditingController _loginController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+
+  bool _isUserAgreementChecked = false; // Состояние чекбокса для пользовательского соглашения
+  bool _isConsentPDChecked = false; // Состояние чекбокса для согласия на обработку ПД
+  String _userAgreementUrl = ''; // URL пользовательского соглашения
+  String _consentPDUrl = ''; // URL согласия на обработку ПД
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchAgreements(); // Загружаем ссылки на соглашения
+  }
+
+  Future<void> _fetchAgreements() async {
+    try {
+      final response = await http.get(
+        Uri(
+          scheme: 'https',
+          host: 'mw.azs-topline.ru',
+          port: 44445,
+          path: '/hrm/hs/ewp/agreements',
+        ),
+        headers: {
+          'Authorization': 'basic 0JDQtNC80LjQvdC60LA6MDk4NzY1NDMyMQ==',
+          'ma-key': '0YHQtdC60YDQtdGC0L3Ri9C50LrQu9GO0Yc=',
+        },
+      );
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        setState(() {
+          _userAgreementUrl = json['UserAgreement'];
+          _consentPDUrl = json['ConsentProcessingPD'];
+        });
+      } else {
+        throw Exception('Ошибка при загрузке соглашений');
+      }
+    } catch (e) {
+      print('Ошибка при получении ссылок на соглашения: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Регистрация'),
+        backgroundColor: Colors.yellow,
+      ),
+      body: SingleChildScrollView(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            TextField(
+              controller: _nameController,
+              decoration: InputDecoration(labelText: 'Имя'),
+            ),
+            SizedBox(height: 10),
+            TextField(
+              controller: _surnameController,
+              decoration: InputDecoration(labelText: 'Фамилия'),
+            ),
+            SizedBox(height: 10),
+            TextField(
+              controller: _patronymicController,
+              decoration: InputDecoration(labelText: 'Отчество'),
+            ),
+            SizedBox(height: 10),
+            TextField(
+              controller: _birthdateController,
+              decoration: InputDecoration(labelText: 'Дата рождения (YYYYMMDD)'),
+            ),
+            SizedBox(height: 10),
+            TextField(
+              controller: _snilsController,
+              decoration: InputDecoration(labelText: 'СНИЛС (XXX-XXX-XXX XX)'),
+            ),
+            SizedBox(height: 10),
+            TextField(
+              controller: _loginController,
+              decoration: InputDecoration(labelText: 'Логин'),
+            ),
+            SizedBox(height: 10),
+            TextField(
+              controller: _passwordController,
+              decoration: InputDecoration(labelText: 'Пароль'),
+              obscureText: true,
+            ),
+            SizedBox(height: 20),
+            Row(
+              children: [
+                Checkbox(
+                  value: _isUserAgreementChecked,
+                  onChanged: (value) {
+                    setState(() {
+                      _isUserAgreementChecked = value ?? false;
+                    });
+                  },
+                ),
+                Expanded(
+                  child: RichText(
+                    text: TextSpan(
+                      style: TextStyle(color: Colors.black),
+                      children: [
+                        TextSpan(text: 'Я согласен с '),
+                        TextSpan(
+                          text: 'условиями использования приложения',
+                          style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline),
+                          recognizer: TapGestureRecognizer()
+                            ..onTap = () async {
+                              if (_userAgreementUrl.isNotEmpty) {
+                                await launchUrl(Uri.parse(_userAgreementUrl), mode: LaunchMode.externalApplication);
+                              }
+                            },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            Row(
+              children: [
+                Checkbox(
+                  value: _isConsentPDChecked,
+                  onChanged: (value) {
+                    setState(() {
+                      _isConsentPDChecked = value ?? false;
+                    });
+                  },
+                ),
+                Expanded(
+                  child: RichText(
+                    text: TextSpan(
+                      style: TextStyle(color: Colors.black),
+                      children: [
+                        TextSpan(text: 'Я согласен на '),
+                        TextSpan(
+                          text: 'обработку персональных данных',
+                          style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline),
+                          recognizer: TapGestureRecognizer()
+                            ..onTap = () async {
+                              if (_consentPDUrl.isNotEmpty) {
+                                await launchUrl(Uri.parse(_consentPDUrl), mode: LaunchMode.externalApplication);
+                              }
+                            },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _isUserAgreementChecked && _isConsentPDChecked ? Colors.green : Colors.grey,
+              ),
+              onPressed: _isUserAgreementChecked && _isConsentPDChecked
+                  ? () => _registerUser(context)
+                  : null,
+              child: Text('Зарегистрироваться'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _registerUser(BuildContext context) async {
+    final name = _nameController.text.trim();
+    final surname = _surnameController.text.trim();
+    final patronymic = _patronymicController.text.trim();
+    final birthdate = _birthdateController.text.trim();
+    final snils = _snilsController.text.trim();
+    final login = _loginController.text.trim();
+    final password = _passwordController.text.trim();
+    if (name.isEmpty ||
+        surname.isEmpty ||
+        birthdate.isEmpty ||
+        snils.isEmpty ||
+        login.isEmpty ||
+        password.isEmpty) {
+      handleError(context, 'Пожалуйста, заполните все обязательные поля');
+      return;
+    }
+    try {
+      final moderationService = ModerationService();
+      final response = await moderationService.registerUser(
+        name: name,
+        surname: surname,
+        patronymic: patronymic,
+        birthdate: birthdate,
+        snils: snils,
+        login: login,
+        password: password,
+      );
+      if (response['success'] == true) {
+        final guid = response['data']['GUID'];
+        await moderationService.saveModerationGUID(guid); // Сохраняем GUID
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Заявка отправлена на модерацию. Ожидайте в течение 2 дней.')),
+        );
+      } else {
+        handleError(context, 'Ошибка при регистрации: ${response['error']}');
+      }
+    } catch (e) {
+      handleError(context, 'Произошла ошибка: $e');
+    }
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\services_screen.dart
+Content:
+// lib/screens/services_screen.dart
+import 'package:flutter/material.dart';
+import '../services/apps_service.dart'; // Исправленный импорт сервиса для получения приложений
+import '../screens/qr_code_screen.dart'; // Импорт экрана QR-кода
+import '../screens/settings_screen.dart'; // Импорт экрана настроек
+import '../widgets/service_button.dart'; // Импорт виджета ServiceButton
+import '../widgets/service_tile.dart'; // Импорт виджета ServiceTile
+import 'package:flutter/foundation.dart'; // Для defaultTargetPlatform
+import 'package:url_launcher/url_launcher.dart'; // Для работы с ссылками
+
+class ServicesScreen extends StatefulWidget {
+  @override
+  _ServicesScreenState createState() => _ServicesScreenState();
+}
+
+class _ServicesScreenState extends State<ServicesScreen> {
+  late Future<List<Map<String, dynamic>>> _appsFuture;
+  @override
+  void initState() {
+    super.initState();
+    _appsFuture = _fetchApps(); // Загружаем данные при старте
+  }
+  Future<List<Map<String, dynamic>>> _fetchApps() async {
+    try {
+      final service = AppsService();
+      return await service.getApps();
+    } catch (e) {
+      print('Ошибка при загрузке приложений: $e');
+      return [];
+    }
+  }
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Сервисы'),
+        backgroundColor: Colors.yellow,
+      ),
+      body: Padding(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          children: [
+            GridView.count(
+              shrinkWrap: true,
+              crossAxisCount: 4,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+              children: [
+                ServiceButton(
+                  icon: Icons.qr_code,
+                  label: 'QR-код',
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => QrCodeScreen()),
+                    );
+                  },
+                ), // Кнопка QR-код
+                ServiceButton(
+                  icon: Icons.build,
+                  label: 'Настройки',
+                  onTap: () {
+                    // Переход на экран настроек
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => SettingsScreen()),
+                    );
+                  },
+                ), // Кнопка Настройки
+              ],
+            ),
+            SizedBox(height: 20),
+            Expanded(
+              child: FutureBuilder<List<Map<String, dynamic>>>(
+                future: _appsFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return Center(child: CircularProgressIndicator());
+                  } else if (snapshot.hasError) {
+                    return Center(child: Text('Ошибка загрузки данных'));
+                  } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                    return Center(child: Text('Нет данных о сервисах'));
+                  } else {
+                    final apps = snapshot.data!;
+                    return ListView.builder(
+                      itemCount: apps.length,
+                      itemBuilder: (context, index) {
+                        final app = apps[index];
+                        return ServiceTile(
+                          title: app['name'] ?? 'Без имени',
+                          onTap: () => _openAppLink(app), // Открываем ссылку
+                        );
+                      },
+                    );
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  // Метод для открытия ссылки на приложение
+  void _openAppLink(Map<String, dynamic> app) async {
+    final platform = defaultTargetPlatform;
+    String? url;
+    if (platform == TargetPlatform.android) {
+      url = app['pathGoogle'];
+    } else if (platform == TargetPlatform.iOS) {
+      url = app['pathApple'];
+    } else if (platform == TargetPlatform.linux || platform == TargetPlatform.windows) {
+      url = app['pathWeb'];
+    } else if (platform == TargetPlatform.fuchsia) {
+      url = app['pathHuawei'];
+    }
+    // Если ссылка для платформы отсутствует, используем веб-ссылку
+    url ??= app['pathWeb'];
+    if (url?.isNotEmpty == true) {
+      try {
+        // Преобразуем nullable String в non-nullable String с помощью проверки
+        final uri = Uri.parse(url!); // Используем оператор !, так как проверили url?.isNotEmpty
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Не удалось открыть ссылку')),
+          );
+        }
+      } catch (e) {
+        print('Ошибка при открытии ссылки: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка при открытии ссылки')),
+        );
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Ссылка недоступна')),
+      );
+    }
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\settings_screen.dart
+Content:
+// lib/screens/settings_screen.dart
+import 'package:flutter/material.dart';
+import '../services/auth_service.dart'; // Для работы с AuthService
+import '../services/delete_profile_service.dart'; // Импортируем новый сервис
+import './login_screen.dart'; // Для перехода на экран авторизации
+import './privacy_settings_screen.dart'; // Импортируем экран настроек приватности
+// Добавь импорт нового экрана в начале файла
+import '../screens/edit_profile_screen.dart';
+
+class SettingsScreen extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Настройки'),
+        backgroundColor: Colors.yellow,
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ListTile(
+              title: Text('Настройки приватности'),
+              leading: Icon(Icons.lock, color: Colors.blue),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => PrivacySettingsScreen()),
+                );
+              },
+            ),
+            ListTile(
+              title: Text('Редактировать профиль'),
+              leading: Icon(Icons.edit),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => EditProfileScreen()),
+                );
+              },
+            ),
+            ListTile(
+              title: Text('Выйти из аккаунта'),
+              leading: Icon(Icons.logout, color: Colors.red),
+              onTap: () {
+                _showLogoutDialog(context);
+              },
+            ),
+            ListTile(
+              title: Text('Удалить аккаунт'),
+              leading: Icon(Icons.delete, color: Colors.red),
+              onTap: () {
+                _showDeleteAccountDialog(context);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Метод для показа диалогового окна подтверждения выхода
+  void _showLogoutDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Выход из аккаунта'),
+          content: Text('Вы уверены, что хотите выйти из аккаунта?'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop(); // Закрываем диалог
+              },
+              child: Text('Отмена'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop(); // Закрываем диалог
+                await _logout(context);
+              },
+              child: Text('Да'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // Метод для показа диалогового окна подтверждения удаления аккаунта
+  void _showDeleteAccountDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Удаление аккаунта'),
+          content: Text('Вы уверены, что хотите удалить свой аккаунт? Это действие необратимо.'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop(); // Закрываем диалог
+              },
+              child: Text('Отмена'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop(); // Закрываем диалог
+                await _deleteAccount(context);
+              },
+              child: Text('Да', style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // Метод для выхода из авторизации
+  Future<void> _logout(BuildContext context) async {
+    try {
+      final authService = AuthService();
+      await authService.logout(); // Очищаем данные пользователя и учетные данные
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => LoginScreen()),
+            (route) => false, // Удаляем все предыдущие маршруты
+      );
+    } catch (e) {
+      print('Ошибка при выходе из аккаунта: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Произошла ошибка: $e')),
+      );
+    }
+  }
+
+  // Метод для удаления аккаунта
+  Future<void> _deleteAccount(BuildContext context) async {
+    try {
+      final deleteProfileService = DeleteProfileService();
+      final success = await deleteProfileService.deleteProfile();
+      if (success) {
+        final authService = AuthService();
+        await authService.logout(); // Очищаем данные пользователя и учетные данные
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (context) => LoginScreen()),
+              (route) => false, // Удаляем все предыдущие маршруты
+        );
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Аккаунт успешно удален')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка при удалении аккаунта')),
+        );
+      }
+    } catch (e) {
+      print('Ошибка при удалении аккаунта: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Произошла ошибка: $e')),
+      );
+    }
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\apps_service.dart
+Content:
+// lib/services/apps_service.dart
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'auth_service.dart';
+import '../../utils/constants.dart';
+
+class AppsService {
+  static const String _baseUrl = 'mw.azs-topline.ru';
+  static const int _port = 44445;
+
+  Future<List<Map<String, dynamic>>> getApps() async {
+    try {
+      final guid = await AuthService().getGUID();
+      if (guid == null || guid.isEmpty) {
+        throw Exception('GUID не найден');
+      }
+      // Корректное формирование URI с портом
+      final uri = Uri(
+        scheme: 'https',
+        host: _baseUrl,
+        port: _port,
+        path: '/hrm/hs/ewp/apps',
+      );
+      print('Запрос к URI: $uri');
+      final response = await http.get(
+        uri,
+        headers: {
+          ...AppConstants.baseHeaders,
+          'ma-guid': guid,
+        },
+      ).timeout(Duration(seconds: 10));
+      print('Статус-код ответа: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true && json['data'] != null) {
+          final apps = List<Map<String, dynamic>>.from(json['data']['list']);
+          return apps;
+        } else {
+          throw Exception('Ошибка в структуре ответа: ${json['error']}');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при получении приложений: $e');
+      rethrow;
+    }
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\auth_service.dart
+Content:
+// lib/services/auth_service.dart
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/material.dart'; // Для BuildContext и виджетов
+import '../../utils/constants.dart';
+
+class AuthService {
+  static const String _baseUrl = 'https://mw.azs-topline.ru';
+  static const int _port = 44445;
+  static const Map<String, String> baseHeaders = {
+    'Authorization': 'basic 0JDQtNC80LjQvdC60LA6MDk4NzY1NDMyMQ==',
+    'ma-key': '0YHQtdC60YDQtdGC0L3Ri9C50LrQu9GO0Yc=',
+    'Content-Type': 'application/json',
+  };
+
+  // Метод авторизации пользователя
+  Future<bool> login(String email, String password, BuildContext context) async {
+    try {
+      final uri = mwUri('authorization');
+      Codec stringToBase64 = utf8.fuse(base64);
+      final bodyMap = {
+        "login": email,
+        "password": password,
+      };
+      final body = stringToBase64.encode(jsonEncode(bodyMap));
+      print('Запрос к URI: $uri');
+      print('Заголовки: $baseHeaders');
+      print('Тело запроса: $body');
+      final response = await http.post(
+        uri,
+        headers: baseHeaders,
+        body: body,
+      ).timeout(Duration(seconds: 10));
+      print('Статус-код: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+      if (response.statusCode != 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка авторизации')),
+        );
+        return false;
+      }
+      final json = jsonDecode(response.body);
+      if (json['success'] == true && json['data'] != null) {
+        final data = json['data'];
+        final guid = data['guid'];
+        if (guid != null && guid.isNotEmpty) {
+          await _saveCredentials(email, password, guid);
+          final employment = data['employment'] as List?;
+          final mainJob = employment?.firstWhereOrNull(
+                (job) => job['type'] == 'Основное место работы',
+          ) ?? {};
+          final userData = {
+            'name': data['firstName'] ?? '',
+            'surname': data['lastName'] ?? '',
+            'patronymic': data['patronymic'] ?? '',
+            'position': mainJob['post'] ?? '',
+            'organization': mainJob['organization_name'] ?? '',
+            'department': mainJob['department_name'] ?? '',
+            'phone': data['phone'] ?? '',
+            'email': data['email'] ?? '',
+            'snils': data['snils'] ?? '',
+            'mainOrganizationGuid': mainJob['organization_guid'] ?? '', // Добавляем GUID основной организации
+            'employment': employment, // Сохраняем все места работы
+            'guid': guid, // Добавляем GUID пользователя
+          };
+          await _saveUserData(userData);
+          await _saveEmployment(userData['employment']); // Сохраняем места работы
+          return true;
+        } else {
+          print('GUID отсутствует в ответе');
+        }
+      } else {
+        print('Поле success в ответе: ${json['success']}');
+      }
+    } catch (e) {
+      print('Ошибка при отправке запроса: $e');
+    }
+    return false;
+  }
+
+  // Метод повторной авторизации по GUID
+  Future<bool> reauthorizeByGuid() async {
+    try {
+      final guid = await getGUID();
+      final email = await getEmail();
+      final password = await getPassword();
+      if (guid == null || guid.isEmpty || email == null || email.isEmpty || password == null || password.isEmpty) {
+        throw Exception('GUID, логин или пароль не найдены');
+      }
+      final uri = mwUri('authorization');
+      Codec stringToBase64 = utf8.fuse(base64);
+      final bodyMap = {
+        "login": email,
+        "password": password,
+      };
+      final body = stringToBase64.encode(jsonEncode(bodyMap));
+      final headers = {
+        ...AuthService.baseHeaders,
+        'ma-guid': guid, // ma-guid не шифруется в Base64
+      } as Map<String, String>; // Явное преобразование в Map<String, String>
+      print('URI: $uri');
+      print('Headers: $headers');
+      print('Body: $body');
+      final response = await http.post(
+        uri,
+        headers: headers,
+        body: body,
+      ).timeout(Duration(seconds: 10));
+      print('Статус-код повторной авторизации: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true && json['data'] != null) {
+          final data = json['data'] as Map<String, dynamic>;
+          final employment = data['employment'] as List?;
+          final mainJob = employment?.firstWhereOrNull(
+                (job) => job['type'] == 'Основное место работы',
+          ) ?? {};
+          final userData = {
+            'name': data['firstName'] ?? '',
+            'surname': data['lastName'] ?? '',
+            'patronymic': data['patronymic'] ?? '',
+            'position': mainJob['post'] ?? '',
+            'organization': mainJob['organization_name'] ?? '',
+            'department': mainJob['department_name'] ?? '',
+            'phone': data['phone'] ?? '',
+            'email': data['email'] ?? '',
+            'snils': data['snils'] ?? '',
+            'mainOrganizationGuid': mainJob['organization_guid'] ?? '', // Добавляем GUID основной организации
+            'employment': employment, // Сохраняем все места работы
+            'guid': data['guid'], // Добавляем GUID пользователя
+          };
+          await _saveUserData(userData);
+          await _saveEmployment(userData['employment']); // Сохраняем места работы
+          return true;
+        } else {
+          print('Поле success в ответе: ${json['success']}');
+        }
+      } else {
+        print('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при повторной авторизации: $e');
+    }
+    return false;
+  }
+
+  // Сохранение данных пользователя
+  Future<void> _saveUserData(Map<String, dynamic> userData) async {
+    final prefs = await SharedPreferences.getInstance();
+    prefs.setString('user_data', jsonEncode(userData));
+    print('Данные пользователя сохранены: $userData');
+  }
+
+  // Получение данных пользователя
+  Future<Map<String, dynamic>> getUserData() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userDataString = prefs.getString('user_data');
+    if (userDataString != null) {
+      try {
+        final userData = jsonDecode(userDataString);
+        print('Полученные данные пользователя из SharedPreferences:');
+        print('Name: ${userData['name']}');
+        print('Surname: ${userData['surname']}');
+        print('Patronymic: ${userData['patronymic']}');
+        print('Position: ${userData['position']}');
+        print('Organization: ${userData['organization']}');
+        print('Department: ${userData['department']}');
+        print('Phone: ${userData['phone']}');
+        print('Email: ${userData['email']}');
+        print('Main Organization GUID: ${userData['mainOrganizationGuid']}');
+        print('Employment: ${userData['employment']}');
+        return userData;
+      } catch (e) {
+        print('Ошибка при декодировании user_data: $e');
+      }
+    }
+    print('Данные пользователя не найдены в SharedPreferences');
+    return {};
+  }
+
+  // Сохранение GUID, логина и пароля
+  Future<void> _saveCredentials(String email, String password, String guid) async {
+    final prefs = await SharedPreferences.getInstance();
+    prefs.setString('guid', guid);
+    prefs.setString('email', email);
+    prefs.setString('password', password);
+    print('GUID, логин и пароль сохранены');
+  }
+
+  // Получение GUID
+  Future<String?> getGUID() async {
+    final prefs = await SharedPreferences.getInstance();
+    final guid = prefs.getString('guid');
+    print('Полученный GUID: $guid');
+    return guid;
+  }
+
+  // Получение логина
+  Future<String?> getEmail() async {
+    final prefs = await SharedPreferences.getInstance();
+    final email = prefs.getString('email');
+    print('Полученный логин: $email');
+    return email;
+  }
+
+  // Получение пароля
+  Future<String?> getPassword() async {
+    final prefs = await SharedPreferences.getInstance();
+    final password = prefs.getString('password');
+    print('Полученный пароль: $password');
+    return password;
+  }
+
+  // Удаление данных пользователя и учетных данных
+  Future<void> logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('guid');
+    await prefs.remove('user_data');
+    await prefs.remove('email');
+    await prefs.remove('password');
+    await prefs.remove('employment'); // Удаляем места работы
+    print('Данные пользователя и учетные данные очищены');
+  }
+
+  // Сохранение мест работы
+  Future<void> _saveEmployment(List<dynamic>? employment) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (employment != null) {
+      prefs.setString('employment', jsonEncode(employment));
+      print('Места работы сохранены: $employment');
+    }
+  }
+
+  // Получение мест работы
+  Future<List<dynamic>> getEmployment() async {
+    final prefs = await SharedPreferences.getInstance();
+    final employmentString = prefs.getString('employment');
+    if (employmentString != null) {
+      return jsonDecode(employmentString);
+    }
+    return [];
+  }
+}
+
+// Вспомогательная функция для формирования URI
+Uri mwUri(String method) {
+  return Uri(
+    scheme: 'https',
+    host: 'mw.azs-topline.ru',
+    port: 44445,
+    path: '/hrm/hs/ewp/$method',
+  );
+}
+
+// Расширение для List<T>
+extension ListExtension<T> on List<T> {
+  T? firstWhereOrNull(bool Function(T) test) {
+    for (var element in this) {
+      if (test(element)) return element;
+    }
+    return null;
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\colleagues_service.dart
+Content:
+// lib/services/colleagues_service.dart
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'auth_service.dart';
+import '../models/colleague.dart';
+
+class ColleaguesService {
+  static const String _baseUrl = 'mw.azs-topline.ru';
+  static const int _port = 44445;
+
+  Future<List<Colleague>> getColleagues({
+    String? organizationGuid,
+    String? departmentGuid,
+  }) async {
+    try {
+      final guid = await AuthService().getGUID();
+      if (guid == null || guid.isEmpty) {
+        throw Exception('GUID не найден');
+      }
+      // Формируем queryParameters только если параметры переданы
+      final Map<String, String> queryParameters = {};
+      if (organizationGuid != null && organizationGuid.isNotEmpty) {
+        queryParameters['guidorg'] = organizationGuid;
+      }
+      if (departmentGuid != null && departmentGuid.isNotEmpty) {
+        queryParameters['guidsub'] = departmentGuid;
+      }
+      final uri = Uri(
+        scheme: 'https',
+        host: _baseUrl,
+        port: _port,
+        path: '/hrm/hs/ewp/colleagues',
+        queryParameters: queryParameters.isNotEmpty ? queryParameters : null,
+      );
+      print('Запрос к URI: $uri');
+      final response = await http.get(
+        uri,
+        headers: {
+          ...AuthService.baseHeaders,
+          'ma-guid': guid,
+        },
+      ).timeout(Duration(seconds: 10));
+      print('Статус-код ответа: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        print('Ответ сервера: $json');
+        if (json['success'] == true && json['data'] != null) {
+          final colleagues = List<Map<String, dynamic>>.from(json['data'])
+              .map((colleague) => Colleague.fromJson(colleague))
+              .toList();
+          print('Получен список коллег: $colleagues');
+          return colleagues;
+        } else {
+          throw Exception('Ошибка в структуре ответа: ${json['error']}');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при получении списка коллег: $e');
+      rethrow;
+    }
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\colleague_card_service.dart
+Content:
+// lib/services/colleague_card_service.dart
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'auth_service.dart';
+
+class ColleagueCardService {
+  static const String _baseUrl = 'mw.azs-topline.ru';
+  static const int _port = 44445;
+
+  Future<Map<String, dynamic>> getColleagueCard({required String guidCollegue}) async {
+    try {
+      final guid = await AuthService().getGUID();
+      if (guid == null || guid.isEmpty) {
+        throw Exception('GUID не найден');
+      }
+      final uri = Uri(
+        scheme: 'https',
+        host: _baseUrl,
+        port: _port,
+        path: '/hrm/hs/ewp/card_collegue',
+        queryParameters: {
+          'guid_collegue': guidCollegue,
+        },
+      );
+      print('Запрос к URI: $uri');
+      final response = await http.get(
+        uri,
+        headers: {
+          ...AuthService.baseHeaders,
+          'ma-guid': guid,
+        },
+      ).timeout(Duration(seconds: 10));
+      print('Статус-код ответа: ${response.statusCode}');
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        print('Ответ сервера: $json');
+        if (json['success'] == true && json['data'] != null) {
+          return json['data']; // Изменено: извлекаем данные из поля 'data'
+        } else {
+          throw Exception(json['error'] ?? 'Неизвестная ошибка');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при получении данных карточки коллеги: $e');
+      rethrow;
+    }
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\delete_profile_service.dart
+Content:
+// lib/services/delete_profile_service.dart
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'auth_service.dart';
+
+class DeleteProfileService {
+  static const String _baseUrl = 'mw.azs-topline.ru';
+  static const int _port = 44445;
+
+  Future<bool> deleteProfile() async {
+    try {
+      final guid = await AuthService().getGUID();
+      final email = await AuthService().getEmail();
+      final password = await AuthService().getPassword();
+      if (guid == null || guid.isEmpty || email == null || email.isEmpty || password == null || password.isEmpty) {
+        throw Exception('GUID, логин или пароль не найдены');
+      }
+      final uri = Uri(
+        scheme: 'https',
+        host: _baseUrl,
+        port: _port,
+        path: '/hrm/hs/ewp/deleteProfile',
+      );
+      final bodyMap = {
+        "login": email,
+        "password": password,
+      };
+      final body = base64Encode(utf8.encode(jsonEncode(bodyMap)));
+      final headers = {
+        ...AuthService.baseHeaders,
+        'ma-guid': guid, // ma-guid не шифруется в Base64
+      } as Map<String, String>; // Явное преобразование в Map<String, String>
+      print('URI: $uri');
+      print('Headers: $headers');
+      print('Body: $body');
+      final response = await http.delete(
+        uri,
+        headers: headers,
+        body: body,
+      ).timeout(Duration(seconds: 10));
+      print('Статус-код удаления профиля: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true) {
+          return true;
+        } else {
+          throw Exception('Ошибка в структуре ответа: ${json['error']}');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при удалении профиля: $e');
+      rethrow;
+    }
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\departments_service.dart
+Content:
+// lib/services/departments_service.dart
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../models/department.dart';
+import '../services/auth_service.dart';
+
+class DepartmentsService {
+  static const String _baseUrl = 'mw.azs-topline.ru';
+  static const int _port = 44445;
+
+  Future<List<Department>> getDepartments({
+    required String organizationGuid,
+  }) async {
+    try {
+      print('Getting departments for organization: $organizationGuid');
+      final userGuid = await AuthService().getGUID();
+      if (userGuid == null || userGuid.isEmpty) {
+        throw Exception('GUID пользователя не найден');
+      }
+      final uri = Uri(
+        scheme: 'https',
+        host: _baseUrl,
+        port: _port,
+        path: '/hrm/hs/ewp/departments',
+      );
+      final headers = {
+        ...AuthService.baseHeaders,
+        'ma-guid': userGuid,
+        'guid-org': organizationGuid,
+      };
+      print('Request headers: $headers');
+      final response = await http.get(
+        uri,
+        headers: headers,
+      ).timeout(Duration(seconds: 10));
+      print('Response status: ${response.statusCode}');
+      print('Response body: ${response.body}');
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true && json['data'] != null) {
+          final departmentsJson = List<Map<String, dynamic>>.from(json['data']);
+          print('Parsed departments: $departmentsJson');
+          final departments = departmentsJson.map((json) {
+            try {
+              return Department.fromJson(json);
+            } catch (e) {
+              print('Error parsing department: $e');
+              return Department(guid: '', name: 'Error');
+            }
+          }).toList();
+          return departments.where((d) => d.guid.isNotEmpty).toList();
+        } else {
+          throw Exception(json['error'] ?? 'Неизвестная ошибка');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Error getting departments: $e');
+      rethrow;
+    }
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\favorites_service.dart
+Content:
+// lib/services/favorites_service.dart
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'auth_service.dart';
+
+class FavoritesService {
+  static const String _baseUrl = 'mw.azs-topline.ru';
+  static const int _port = 44445;
+
+  // Метод для добавления сотрудника в избранное
+  Future<bool> addToFavorites(String guidSelected) async {
+    try {
+      final guid = await AuthService().getGUID();
+      if (guid == null || guid.isEmpty) {
+        throw Exception('GUID не найден');
+      }
+      final uri = Uri(
+        scheme: 'https',
+        host: _baseUrl,
+        port: _port,
+        path: '/hrm/hs/ewp/addSelected',
+      );
+      final bodyMap = {"guid_selected": guidSelected};
+      final body = base64Encode(utf8.encode(jsonEncode(bodyMap)));
+      final response = await http.post(
+        uri,
+        headers: {
+          ...AuthService.baseHeaders,
+          'ma-guid': guid,
+        },
+        body: body,
+      ).timeout(Duration(seconds: 10));
+      print('Статус-код добавления в избранное: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true && json['data'] != null) {
+          return true;
+        } else {
+          throw Exception('Ошибка в структуре ответа: ${json['error']}');
+        }
+      } else if (response.statusCode == 409) {
+        final json = jsonDecode(response.body);
+        if (json['error'] == 'Пользователь уже в избранном') {
+          print('Пользователь уже в избранном');
+          return true; // Возвращаем true, чтобы состояние осталось без изменений
+        } else {
+          throw Exception('HTTP-ошибка: ${response.statusCode}');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при добавлении в избранное: $e');
+      rethrow;
+    }
+  }
+
+  // Метод для удаления сотрудника из избранного
+  Future<bool> removeFromFavorites(String guidSelected) async {
+    try {
+      final guid = await AuthService().getGUID();
+      if (guid == null || guid.isEmpty) {
+        throw Exception('GUID не найден');
+      }
+      final uri = Uri(
+        scheme: 'https',
+        host: _baseUrl,
+        port: _port,
+        path: '/hrm/hs/ewp/deleteSelected',
+      );
+      final bodyMap = {"guid_selected": guidSelected};
+      final body = base64Encode(utf8.encode(jsonEncode(bodyMap)));
+      final response = await http.post(
+        uri,
+        headers: {
+          ...AuthService.baseHeaders,
+          'ma-guid': guid,
+        },
+        body: body,
+      ).timeout(Duration(seconds: 10));
+      print('Статус-код удаления из избранного: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true && json['data'] != null) {
+          return true;
+        } else {
+          throw Exception('Ошибка в структуре ответа: ${json['error']}');
+        }
+      } else if (response.statusCode == 404) {
+        final json = jsonDecode(response.body);
+        if (json['error'] == 'Пользователя нет в избранном') {
+          print('Пользователя нет в избранном');
+          return true; // Возвращаем true, чтобы состояние осталось без изменений
+        } else {
+          throw Exception('HTTP-ошибка: ${response.statusCode}');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при удалении из избранного: $e');
+      rethrow;
+    }
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\moderation_service.dart
+Content:
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../utils/constants.dart';
+
+class ModerationService {
+  static const String _baseUrl = 'mw.azs-topline.ru';
+  static const int _port = 44445;
+
+  // Вспомогательная функция для формирования URI
+  Uri _buildUri(String method) {
+    return Uri(
+      scheme: 'https',
+      host: _baseUrl,
+      port: _port,
+      path: '/hrm/hs/ewp/$method',
+    );
+  }
+
+  // Метод регистрации пользователя
+  Future<Map<String, dynamic>> registerUser({
+    required String name,
+    required String surname,
+    required String patronymic,
+    required String birthdate,
+    required String snils,
+    required String login,
+    required String password,
+  }) async {
+    try {
+      final uri = _buildUri('registration');
+
+      // Формируем тело запроса
+      final bodyMap = {
+        "name": name,
+        "surname": surname,
+        "patronymic": patronymic,
+        "birthdate": birthdate,
+        "snils": snils,
+        "login": login,
+        "password": password,
+      };
+
+      // Кодируем тело запроса в Base64
+      Codec stringToBase64 = utf8.fuse(base64);
+      final body = stringToBase64.encode(jsonEncode(bodyMap));
+
+      final response = await http.post(
+        uri,
+        headers: AppConstants.baseHeaders,
+        body: body,
+      );
+
+      print('Статус-код регистрации: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true && json['data'] != null) {
+          return {
+            'success': true,
+            'data': json['data'],
+            'error': '',
+          };
+        } else {
+          throw Exception(json['error'] ?? 'Неизвестная ошибка');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при регистрации пользователя: $e');
+      rethrow;
+    }
+  }
+
+  // Метод проверки статуса модерации
+  Future<Map<String, dynamic>> checkModerationStatus(String guid) async {
+    try {
+      final uri = _buildUri('moderation');
+
+      // Формируем тело запроса
+      final bodyMap = {"GUID": guid};
+
+      // Кодируем тело запроса в Base64
+      Codec stringToBase64 = utf8.fuse(base64);
+      final body = stringToBase64.encode(jsonEncode(bodyMap));
+
+      final response = await http.post(
+        uri,
+        headers: AppConstants.baseHeaders,
+        body: body,
+      );
+
+      print('Статус-код модерации: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true && json['data'] != null) {
+          final status = json['data'];
+
+          // Если статус отличается от "На модерации", удаляем GUID
+          if (status != 'На модерации') {
+            await clearModerationGUID();
+          }
+
+          return {
+            'success': true,
+            'status': status,
+          };
+        } else {
+          throw Exception(json['error'] ?? 'Неизвестная ошибка');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при проверке статуса модерации: $e');
+      rethrow;
+    }
+  }
+
+  // Сохранение GUID модерации
+  Future<void> saveModerationGUID(String guid) async {
+    final prefs = await SharedPreferences.getInstance();
+    prefs.setString('moderation_guid', guid);
+    print('GUID модерации сохранен: $guid');
+  }
+
+  // Получение GUID модерации
+  Future<String?> getModerationGUID() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('moderation_guid');
+  }
+
+  // Удаление GUID модерации
+  Future<void> clearModerationGUID() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('moderation_guid');
+    print('GUID модерации удален');
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\news_service.dart
+Content:
+// lib/services/news_service.dart
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'auth_service.dart';
+
+class NewsService {
+  static const String _baseUrl = 'mw.azs-topline.ru';
+  static const int _port = 44445;
+
+  static Map<String, String> _getHeaders(String guid) {
+    return {
+      ...AuthService.baseHeaders,
+      'ma-guid': guid,
+    };
+  }
+
+  Future<List<Map<String, dynamic>>> getNews({
+    int limit = 20,
+    int offset = 0,
+    DateTime? startDate,
+    DateTime? endDate,
+    String? searchQuery,
+  }) async {
+    try {
+      final guid = await AuthService().getGUID();
+      if (guid == null || guid.isEmpty) {
+        throw Exception('GUID не найден');
+      }
+      final uri = Uri(
+        scheme: 'https',
+        host: _baseUrl,
+        port: _port,
+        path: '/hrm/hs/ewp/news',
+        queryParameters: {
+          'limit': limit.toString(),
+          'offset': offset.toString(),
+          if (startDate != null) 'start_date': startDate.toIso8601String().split('T')[0],
+          if (endDate != null) 'end_date': endDate.toIso8601String().split('T')[0],
+          if (searchQuery != null && searchQuery.isNotEmpty) 'search': searchQuery,
+        },
+      );
+      print('Запрос к URI: $uri');
+      final response = await http.get(uri, headers: _getHeaders(guid));
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true && json['data'] != null) {
+          if (json['data'] is List) {
+            return List<Map<String, dynamic>>.from(json['data']);
+          } else {
+            throw Exception('Некорректный формат данных: "data" не является списком');
+          }
+        } else {
+          throw Exception('Ошибка в структуре ответа: ${json['error']}');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при получении новостей: $e');
+      rethrow;
+    }
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\phone_edit_service.dart
+Content:
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/constants.dart';
+import '../services/auth_service.dart';
+
+class PhoneEditService {
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
+
+  static Future<Map<String, dynamic>> editPhoneNumber({
+    required String newPhone,
+    required int step,
+  }) async {
+    try {
+      final guid = await AuthService().getGUID();
+      if (guid == null || guid.isEmpty) {
+        throw Exception('GUID пользователя не найден');
+      }
+
+      final bodyMap = {'newPhone': newPhone, 'step': step};
+      final encodedBody = base64.encode(utf8.encode(json.encode(bodyMap)));
+
+      final uri = Uri(
+        scheme: 'https',
+        host: _baseUrl,
+        port: _port,
+        path: '/hrm/hs/ewp/edit_number_profile',
+      );
+
+      final response = await http.post(
+        uri,
+        headers: {
+          ...AuthService.baseHeaders,
+          'ma-guid': guid,
+        },
+        body: encodedBody,
+      );
+
+      print('Статус-код изменения номера телефона: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+
+      if (response.statusCode == 200 || response.statusCode == 409) {
+        final decodedResponse = json.decode(response.body);
+        return {
+          'success': decodedResponse['success'] ?? false,
+          'data': decodedResponse['data'],
+          'error': decodedResponse['error'] ?? '',
+          'allowed': decodedResponse['allowed'] ?? false,
+        };
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при изменении номера телефона: $e');
+      return {
+        'success': false,
+        'error': e.toString(),
+      };
+    }
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\privacy_service.dart
+Content:
+// lib/services/privacy_service.dart
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../services/auth_service.dart';
+
+class PrivacyService {
+  static const String _baseUrl = 'mw.azs-topline.ru';
+  static const int _port = 44445;
+
+  Future<Map<String, bool>> getPrivacySettings() async {
+    final guid = await AuthService().getGUID();
+    if (guid == null || guid.isEmpty) throw Exception('GUID не найден');
+
+    final uri = Uri(scheme: 'https', host: _baseUrl, port: _port, path: '/hrm/hs/ewp/privacy');
+    final response = await http.get(
+      uri,
+      headers: {
+        ...AuthService.baseHeaders,
+        'ma-guid': guid,
+      },
+    ).timeout(Duration(seconds: 10));
+
+    if (response.statusCode != 200) throw Exception('Ошибка сети');
+
+    final json = jsonDecode(response.body);
+    if (json['success'] != true || json['data'] == null) throw Exception(json['error'] ?? 'Неизвестная ошибка');
+
+    final data = json['data'] as Map<String, dynamic>;
+    return {
+      'number': data['number'] ?? false,
+      'birthday': data['birthday'] ?? false,
+      'mail': data['mail'] ?? false,
+      'links': data['links'] ?? false,
+    };
+  }
+
+  Future<bool> updatePrivacySettings(Map<String, bool> settings) async {
+    final guid = await AuthService().getGUID();
+    if (guid == null || guid.isEmpty) throw Exception('GUID не найден');
+
+    final body = base64Encode(utf8.encode(jsonEncode({
+      'number': settings['number'] ?? false,
+      'birthday': settings['birthday'] ?? false,
+      'mail': settings['mail'] ?? false,
+      'links': settings['links'] ?? false,
+    })));
+
+    final uri = Uri(scheme: 'https', host: _baseUrl, port: _port, path: '/hrm/hs/ewp/edit_privacy');
+    final response = await http.post(
+      uri,
+      headers: {
+        ...AuthService.baseHeaders,
+        'ma-guid': guid,
+      },
+      body: body,
+    ).timeout(Duration(seconds: 10));
+
+    if (response.statusCode != 200) throw Exception('Ошибка сети');
+
+    final json = jsonDecode(response.body);
+    return json['success'] == true && json['data'] == 'Успешно';
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\profile_edit_service.dart
+Content:
+// lib/services/profile_edit_service.dart
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/constants.dart';
+import '../services/auth_service.dart';
+
+class ProfileEditService {
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
+
+  static Future<Map<String, dynamic>> editProfile({
+    required String email,
+    Map<String, String> links = const {},
+    String? photoBase64,
+  }) async {
+    try {
+      final guid = await AuthService().getGUID();
+      if (guid == null || guid.isEmpty) {
+        throw Exception('GUID пользователя не найден');
+      }
+
+      final bodyMap = {
+        'email': email,
+        'links': links,
+        'photo': photoBase64 ?? '',
+      };
+
+      final encodedBody = base64.encode(utf8.encode(json.encode(bodyMap)));
+
+      final uri = Uri(
+        scheme: 'https',
+        host: _baseUrl,
+        port: _port,
+        path: '/hrm/hs/ewp/edit_profile',
+      );
+
+      final response = await http.post(
+        uri,
+        headers: {
+          ...AuthService.baseHeaders,
+          'ma-guid': guid,
+        },
+        body: encodedBody,
+      );
+
+      if (response.statusCode != 200) {
+        throw Exception('Ошибка сервера: ${response.statusCode}');
+      }
+
+      final decodedResponse = json.decode(response.body);
+
+      if (decodedResponse['success'] == true) {
+        return {
+          'success': true,
+          'message': 'Профиль успешно обновлен',
+        };
+      } else {
+        return {
+          'success': false,
+          'error': decodedResponse['error'] ?? 'Неизвестная ошибка',
+        };
+      }
+    } catch (e) {
+      return {
+        'success': false,
+        'error': e.toString(),
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> editPhoneNumber({
+    required String newPhone,
+    required int step,
+  }) async {
+    try {
+      final guid = await AuthService().getGUID();
+      if (guid == null || guid.isEmpty) {
+        throw Exception('GUID пользователя не найден');
+      }
+
+      final bodyMap = {
+        'newPhone': newPhone,
+        'step': step,
+      };
+
+      final encodedBody = base64.encode(utf8.encode(json.encode(bodyMap)));
+
+      final uri = Uri(
+        scheme: 'https',
+        host: _baseUrl,
+        port: _port,
+        path: '/hrm/hs/ewp/edit_number_profile',
+      );
+
+      final response = await http.post(
+        uri,
+        headers: {
+          ...AuthService.baseHeaders,
+          'ma-guid': guid,
+        },
+        body: encodedBody,
+      );
+
+      print('Статус-код изменения номера телефона: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+
+      if (response.statusCode == 200 || response.statusCode == 409) {
+        final decodedResponse = json.decode(response.body);
+        return {
+          'success': decodedResponse['success'] ?? false,
+          'data': decodedResponse['data'],
+          'error': decodedResponse['error'] ?? '',
+          'allowed': decodedResponse['allowed'] ?? false,
+        };
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при изменении номера телефона: $e');
+      return {
+        'success': false,
+        'error': e.toString(),
+      };
+    }
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\profile_service.dart
+Content:
+// lib/services/profile_service.dart
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'auth_service.dart';
+
+class ProfileService {
+  static const String _baseUrl = 'mw.azs-topline.ru';
+  static const int _port = 44445;
+
+  Future<Map<String, dynamic>> getProfile() async {
+    try {
+      final authService = AuthService();
+      final guid = await authService.getGUID();
+      if (guid == null || guid.isEmpty) {
+        throw Exception('GUID не найден');
+      }
+      final uri = Uri(
+        scheme: 'https',
+        host: _baseUrl,
+        port: _port,
+        path: '/hrm/hs/ewp/getProfile',
+      );
+      final response = await http.get(
+        uri,
+        headers: {
+          ...AuthService.baseHeaders,
+          'ma-guid': guid,
+        },
+      ).timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        print('Ответ сервера: $json');
+        if (json['success'] == true && json['data'] != null) {
+          return json['data']; // Изменено: извлекаем данные из поля 'data'
+        } else {
+          throw Exception(json['error'] ?? 'Неизвестная ошибка');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при получении данных профиля: $e');
+      rethrow;
+    }
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\registration_service.dart
+Content:
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../utils/constants.dart';
+
+class RegistrationService {
+  static const String _baseUrl = 'mw.azs-topline.ru';
+  static const int _port = 44445;
+
+  // Вспомогательная функция для формирования URI
+  Uri _buildUri(String method) {
+    final uri = Uri(
+      scheme: 'https',
+      host: _baseUrl,
+      port: _port,
+      path: '/hrm/hs/ewp/$method',
+    );
+    print('Сформированный URI: $uri'); // Логирование URI
+    return uri;
+  }
+
+  // Метод регистрации пользователя
+  Future<Map<String, dynamic>> register({
+    required String name,
+    required String surname,
+    required String patronymic,
+    required String birthdate,
+    required String snils,
+    required String login,
+    required String password,
+  }) async {
+    try {
+      final uri = _buildUri('registration');
+
+      // Формируем тело запроса
+      final bodyMap = {
+        "name": name,
+        "surname": surname,
+        "patronymic": patronymic,
+        "birthdate": birthdate.replaceAll('-', '').replaceAll(' ', ''),
+        "snils": snils.replaceAll('-', '').replaceAll(' ', ''),
+        "login": login,
+        "password": password,
+      };
+
+      // Кодируем тело запроса в Base64
+      Codec stringToBase64 = utf8.fuse(base64);
+      final body = stringToBase64.encode(jsonEncode(bodyMap));
+      print('Тело запроса (Base64): $body'); // Логирование тела запроса
+
+      // Логирование заголовков
+      print('Заголовки запроса: ${AppConstants.baseHeaders}');
+
+      final response = await http.post(
+        uri,
+        headers: AppConstants.baseHeaders,
+        body: body,
+      );
+
+      print('Статус-код регистрации: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true && json['data'] != null) {
+          final guid = json['data']['GUID'];
+          final status = json['data']['status'];
+
+          // Сохраняем GUID локально
+          await _saveModerationGUID(guid);
+
+          return {
+            'success': true,
+            'guid': guid,
+            'status': status,
+          };
+        } else {
+          throw Exception(json['error'] ?? 'Неизвестная ошибка');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при регистрации: $e');
+      rethrow;
+    }
+  }
+
+  // Метод проверки статуса модерации
+  Future<Map<String, dynamic>> checkModerationStatus(String guid) async {
+    try {
+      final uri = _buildUri('moderation');
+
+      // Формируем тело запроса
+      final bodyMap = {"GUID": guid};
+
+      // Кодируем тело запроса в Base64
+      Codec stringToBase64 = utf8.fuse(base64);
+      final body = stringToBase64.encode(jsonEncode(bodyMap));
+      print('Тело запроса (Base64): $body'); // Логирование тела запроса
+
+      // Логирование заголовков
+      print('Заголовки запроса: ${AppConstants.baseHeaders}');
+
+      final response = await http.post(
+        uri,
+        headers: AppConstants.baseHeaders,
+        body: body,
+      );
+
+      print('Статус-код модерации: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true && json['data'] != null) {
+          final status = json['data']['status'];
+
+          // Если статус не "На модерации", удаляем GUID
+          if (status != 'На модерации') {
+            await _clearModerationGUID();
+          }
+
+          return {
+            'success': true,
+            'status': status,
+          };
+        } else {
+          throw Exception(json['error'] ?? 'Неизвестная ошибка');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при проверке статуса модерации: $e');
+      rethrow;
+    }
+  }
+
+  // Сохранение GUID модерации
+  Future<void> _saveModerationGUID(String guid) async {
+    final prefs = await SharedPreferences.getInstance();
+    prefs.setString('moderation_guid', guid);
+    print('GUID модерации сохранен: $guid');
+  }
+
+  // Получение GUID модерации
+  Future<String?> getModerationGUID() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('moderation_guid');
+  }
+
+  // Удаление GUID модерации
+  Future<void> _clearModerationGUID() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('moderation_guid');
+    print('GUID модерации удален');
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\utils\constants.dart
+Content:
+// lib/utils/constants.dart
+class AppConstants {
+  static const String baseUrl = 'mw.azs-topline.ru';
+  static const int port = 44445;
+
+  static const Map<String, String> baseHeaders = {
+    'Authorization': 'basic 0JDQtNC80LjQvdC60LA6MDk4NzY1NDMyMQ==',
+    'ma-key': '0YHQtdC60YDQtdGC0L3Ri9C50LrQu9GO0Yc=',
+    'Content-Type': 'application/json',
+  };
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\utils\error_handler.dart
+Content:
+// lib/utils/error_handler.dart
+import 'package:flutter/material.dart';
+
+void handleError(BuildContext context, dynamic error) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text('Произошла ошибка: $error'),
+      duration: Duration(seconds: 3),
+    ),
+  );
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\widgets\service_button.dart
+Content:
+// lib/widgets/service_button.dart
+import 'package:flutter/material.dart';
+
+class ServiceButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+
+  ServiceButton({required this.icon, required this.label, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          CircleAvatar(
+            backgroundColor: Colors.purple,
+            radius: 25,
+            child: Icon(icon, color: Colors.white, size: 30),
+          ),
+          SizedBox(height: 5),
+          Text(label, style: TextStyle(fontSize: 12)),
+        ],
+      ),
+    );
+  }
+}
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\widgets\service_tile.dart
+Content:
+// lib/widgets/service_tile.dart
+import 'package:flutter/material.dart';
+
+class ServiceTile extends StatelessWidget {
+  final String title;
+  final VoidCallback onTap;
+
+  ServiceTile({required this.title, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.symmetric(vertical: 5),
+      color: Colors.green,
+      child: ListTile(
+        title: Text(title, style: TextStyle(color: Colors.white)),
+        trailing: Icon(Icons.arrow_forward, color: Colors.white),
+        onTap: onTap, // Добавляем обработчик нажатия
+      ),
+    );
+  }
+}
+--------------------------------------------------
