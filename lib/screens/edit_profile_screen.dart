@@ -1,3 +1,4 @@
+// lib/screens/edit_profile_screen.dart
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:convert';
@@ -22,16 +23,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _whatsappController = TextEditingController();
   final _phoneController = TextEditingController();
   String? _initialPhone;
-
   String? _photoBase64;
   final picker = ImagePicker();
-
   static const int _maxImageSizeInBytes = 2 * 1024 * 1024;
+  String? _deviceId;
+  String? _guid;
 
   @override
   void initState() {
     super.initState();
     _loadInitialData();
+    _loadDeviceIdAndGuid();
   }
 
   Future<void> _loadInitialData() async {
@@ -50,19 +52,31 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
   }
 
+  Future<void> _loadDeviceIdAndGuid() async {
+    try {
+      final authService = AuthService();
+      final deviceId = await authService.getDeviceId();
+      final guid = await authService.getGUID();
+      setState(() {
+        _deviceId = deviceId;
+        _guid = guid;
+      });
+    } catch (e) {
+      print('Ошибка при загрузке deviceId и guid: $e');
+    }
+  }
+
   Future<void> _pickImage() async {
     final pickedFile = await picker.pickImage(source: ImageSource.gallery);
     if (pickedFile != null) {
       final file = File(pickedFile.path);
       final size = await file.length();
-
       if (size > _maxImageSizeInBytes) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Фото слишком большое. Максимум 2 МБ.')),
         );
         return;
       }
-
       setState(() {
         _photoBase64 = base64Encode(file.readAsBytesSync());
       });
@@ -83,7 +97,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             },
             photoBase64: _photoBase64,
           );
-
           if (result['success'] == true) {
             ScaffoldMessenger.of(context)
                 .showSnackBar(SnackBar(content: Text('Профиль успешно обновлён')));
@@ -132,7 +145,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   String? _validateEmail(String? value) {
     if (value == null || value.isEmpty) return null;
-
     final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
     if (!emailRegex.hasMatch(value)) {
       return 'Введите корректный email';
@@ -142,7 +154,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   String? _validateLink(String? value, String platform) {
     if (value == null || value.isEmpty) return null;
-
     switch (platform) {
       case 'VK':
         final vkRegex = RegExp(r'^(https?:\/\/)?(www\.)?vk\.com\/[\w\.\-_%]+$', caseSensitive: false);
@@ -163,18 +174,37 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         }
         break;
     }
-
     return null;
   }
 
   String? _validatePhone(String? value) {
     if (value == null || value.isEmpty) return null;
-
-    final phoneRegex = RegExp(r'^[0-9]+$');
+    final phoneRegex = RegExp(r'^[0-9+\-\s()]*$');
     if (!phoneRegex.hasMatch(value)) {
-      return 'Введите корректный номер телефона (только цифры)';
+      return 'Введите корректный номер телефона';
     }
     return null;
+  }
+
+  String _formatPhoneNumber(String phone) {
+    // Удаляем все символы, кроме цифр
+    String cleaned = phone.replaceAll(RegExp(r'\D'), '');
+
+    // Если номер начинается с 7 или 8, удаляем первую цифру и добавляем +7
+    if (cleaned.startsWith('7') || cleaned.startsWith('8')) {
+      cleaned = '+7' + cleaned.substring(1);
+    } else {
+      cleaned = '+$cleaned';
+    }
+
+    // Форматируем номер в формат +7 (XXX) XXX-XX-XX
+    if (cleaned.length == 12) {
+      cleaned = cleaned.replaceFirstMapped(RegExp(r'^(\+\d{1})(\d{3})(\d{3})(\d{2})(\d{2})$'), (match) {
+        return '${match[1]} (${match[2]}) ${match[3]}-${match[4]}-${match[5]}';
+      });
+    }
+
+    return cleaned;
   }
 
   Future<void> _changePhoneNumber() async {
@@ -186,7 +216,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       return;
     }
 
-    if (currentPhone == _initialPhone) {
+    // Форматируем номер телефона
+    final formattedPhone = _formatPhoneNumber(currentPhone);
+
+    if (formattedPhone == _initialPhone) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Новый номер не отличается от текущего.')),
       );
@@ -217,7 +250,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
     try {
       final result = await PhoneEditService.editPhoneNumber(
-        newPhone: currentPhone,
+        newPhone: formattedPhone,
         step: 1,
       );
 
@@ -226,7 +259,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) => ConfirmPhoneScreen(newPhone: currentPhone),
+              builder: (context) => ConfirmPhoneScreen(
+                newPhone: formattedPhone,
+                guid: _guid ?? '', // Используем значение по умолчанию, если guid null
+                deviceId: _deviceId ?? '', // Добавляем deviceId
+              ),
             ),
           );
         }
@@ -262,34 +299,29 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 validator: _validateEmail,
               ),
               SizedBox(height: 16),
-
               TextFormField(
                 controller: _vkController,
                 decoration: InputDecoration(labelText: 'Ссылка на VK'),
                 validator: (value) => _validateLink(value, 'VK'),
               ),
               SizedBox(height: 16),
-
               TextFormField(
                 controller: _telegramController,
                 decoration: InputDecoration(labelText: 'Ссылка на Telegram'),
                 validator: (value) => _validateLink(value, 'Telegram'),
               ),
               SizedBox(height: 16),
-
               TextFormField(
                 controller: _whatsappController,
                 decoration: InputDecoration(labelText: 'Ссылка на WhatsApp'),
                 validator: (value) => _validateLink(value, 'WhatsApp'),
               ),
               SizedBox(height: 16),
-
               ElevatedButton.icon(
                 onPressed: _pickImage,
                 icon: Icon(Icons.photo_library),
                 label: Text('Выбрать фото'),
               ),
-
               if (_photoBase64 != null)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 16.0),
@@ -306,16 +338,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     ),
                   ),
                 ),
-
               SizedBox(height: 24),
-
               ElevatedButton.icon(
                 onPressed: _saveProfile,
                 icon: Icon(Icons.save),
                 label: Text('Сохранить'),
               ),
               SizedBox(height: 16),
-
               TextFormField(
                 controller: _phoneController,
                 decoration: InputDecoration(labelText: 'Номер телефона'),
@@ -324,7 +353,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 validator: _validatePhone,
               ),
               SizedBox(height: 16),
-
               ElevatedButton.icon(
                 onPressed: _changePhoneNumber,
                 icon: Icon(Icons.phone),
@@ -335,5 +363,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _vkController.dispose();
+    _telegramController.dispose();
+    _whatsappController.dispose();
+    _phoneController.dispose();
+    super.dispose();
   }
 }

@@ -43,13 +43,31 @@ class AuthService {
           final data = json['data'];
           final askHim = data['askHim'];
           final oktell = askHim?['oktell'] ?? false;
-          if (askHim == null || !oktell) {
-            throw Exception('Ошибка при отправке кода подтверждения');
+          final guid = data['person']['guid'] as String?;
+          final deviceId = deviceInfo.deviceId; // Используем deviceId из данных устройства
+          if (guid == null || guid.isEmpty || deviceId.isEmpty) {
+            throw Exception('GUID или deviceId отсутствуют в ответе');
           }
-          final guid = data['person']['guid'];
-          final deviceId = deviceInfo.deviceId;
-          if (guid != null && guid.isNotEmpty && deviceId != null && deviceId.isNotEmpty) {
-            // Не сохраняем данные здесь, ждём подтверждения устройства
+          final personData = data['person'];
+          final employment = List<Map<String, dynamic>>.from(personData['employment'] ?? []);
+          final mainJob = employment.firstWhere(
+                (job) => job['type'] == 'Основное место работы',
+            orElse: () => {},
+          );
+          final userData = {
+            'guid': personData['guid'],
+            'firstName': personData['firstName'] ?? '',
+            'lastName': personData['lastName'] ?? '',
+            'patronymic': personData['patronymic'] ?? '',
+            'employment': employment,
+            'position': mainJob['post'] ?? '',
+            'organization': mainJob['organization_name'] ?? '',
+            'department': mainJob['department_name'] ?? '',
+            'mainOrganizationGuid': mainJob['organization_guid'] ?? '',
+          };
+          // Сохраняем данные здесь
+          await _saveCredentials(login, password, guid, deviceId);
+          if (askHim != null && oktell) {
             return {
               'success': true,
               'data': data,
@@ -58,7 +76,15 @@ class AuthService {
               'askHim': askHim,
             };
           } else {
-            throw Exception('GUID или deviceId отсутствуют в ответе');
+            // Если блока askHim нет, сразу сохраняем данные и переходим на главный экран
+            await _saveUserData(userData);
+            return {
+              'success': true,
+              'data': data,
+              'guid': guid,
+              'deviceId': deviceId,
+              'askHim': null,
+            };
           }
         } else {
           throw Exception(json['error'] ?? 'Неизвестная ошибка авторизации');
@@ -72,7 +98,7 @@ class AuthService {
     }
   }
 
-  Future<bool> confirmDevice({required String code, required String deviceId, required BuildContext context}) async {
+  Future<bool> confirmDevice({required String code, required String login, required String password, required String deviceId, required BuildContext context}) async {
     try {
       final guid = await getGUID();
       if (guid == null || guid.isEmpty) {
@@ -123,7 +149,7 @@ class AuthService {
             'employment': employment,
           };
           await _saveUserData(userData);
-          await _saveCredentials(person['email'], person['phone'], guid, deviceId);
+          await _saveCredentials(login, password, guid, deviceId);
           return true;
         } else {
           throw Exception(json['error'] ?? 'Ошибка подтверждения устройства');
@@ -189,68 +215,6 @@ class AuthService {
     await prefs.remove('password');
     await prefs.remove('deviceId');
     print('Данные пользователя удалены');
-  }
-
-  Future<bool> reauthorizeByGuid() async {
-    try {
-      final guid = await getGUID();
-      final email = await getEmail();
-      final password = await getPassword();
-      if (guid == null || guid.isEmpty || email == null || email.isEmpty || password == null || password.isEmpty) {
-        return false;
-      }
-      final uri = mwUri('authorization');
-      final bodyMap = {
-        "login": email,
-        "password": password,
-      };
-      final body = base64Encode(utf8.encode(jsonEncode(bodyMap)));
-      final headers = {
-        ...AuthService.baseHeaders,
-        'ma-guid': guid,
-      };
-      print('Повторная авторизация: $uri');
-      print('Headers: $headers');
-      print('Body: $body');
-      final response = await http.post(
-        uri,
-        headers: headers,
-        body: body,
-      ).timeout(Duration(seconds: 10));
-      print('Статус-код: ${response.statusCode}');
-      print('Ответ сервера: ${response.body}');
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body);
-        if (json['success'] == true && json['data'] != null) {
-          final data = json['data'];
-          final employment = List<Map<String, dynamic>>.from(data['employment'] ?? []);
-          final mainJob = employment.firstWhere(
-                (job) => job['type'] == 'Основное место работы',
-            orElse: () => {},
-          );
-          final userData = {
-            'guid': data['guid'],
-            'firstName': data['firstName'] ?? '',
-            'lastName': data['lastName'] ?? '',
-            'patronymic': data['patronymic'] ?? '',
-            'phone': data['phone'] ?? '',
-            'email': data['email'] ?? '',
-            'snils': data['snils'] ?? '',
-            'position': mainJob['post'] ?? '',
-            'organization': mainJob['organization_name'] ?? '',
-            'department': mainJob['department_name'] ?? '',
-            'mainOrganizationGuid': mainJob['organization_guid'] ?? '',
-            'employment': employment,
-          };
-          await _saveUserData(userData);
-          return true;
-        }
-      }
-      return false;
-    } catch (e) {
-      print('Ошибка при повторной авторизации: $e');
-      return false;
-    }
   }
 }
 

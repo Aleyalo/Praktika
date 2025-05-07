@@ -1,5 +1,6 @@
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\main.dart
 Content:
+// lib/main.dart
 import 'package:flutter/material.dart';
 import './screens/login_screen.dart'; // Импорт экрана входа
 import './screens/main_screen.dart'; // Импорт главного экрана
@@ -842,13 +843,13 @@ import '../screens/main_screen.dart';
 
 class ConfirmPhoneScreen extends StatefulWidget {
   final String newPhone;
-  final String? deviceId;
   final String? guid; // Добавляем параметр guid
+  final String? deviceId; // Добавляем параметр deviceId
   const ConfirmPhoneScreen({
     Key? key,
     required this.newPhone,
-    this.deviceId, // Делаем необязательным
-    this.guid, // Делаем необязательным
+    required this.guid, // Делаем обязательным
+    required this.deviceId, // Делаем обязательным
   }) : super(key: key);
 
   @override
@@ -866,9 +867,17 @@ class _ConfirmPhoneScreenState extends State<ConfirmPhoneScreen> {
       _errorMessage = '';
     });
     try {
-      final result = await AuthService().confirmDevice(
+      final authService = AuthService();
+      final email = await authService.getEmail();
+      final password = await authService.getPassword();
+      if (email == null || email.isEmpty || password == null || password.isEmpty) {
+        throw Exception('Email или пароль не найдены');
+      }
+      final result = await authService.confirmDevice(
         code: _codeController.text,
-        deviceId: widget.deviceId!,
+        login: email,
+        password: password,
+        deviceId: widget.deviceId!, // Используем переданный deviceId
         context: context,
       );
       if (result) {
@@ -968,6 +977,7 @@ class DocumentsScreen extends StatelessWidget {
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\edit_profile_screen.dart
 Content:
+// lib/screens/edit_profile_screen.dart
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:convert';
@@ -992,16 +1002,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _whatsappController = TextEditingController();
   final _phoneController = TextEditingController();
   String? _initialPhone;
-
   String? _photoBase64;
   final picker = ImagePicker();
-
   static const int _maxImageSizeInBytes = 2 * 1024 * 1024;
+  String? _deviceId;
+  String? _guid;
 
   @override
   void initState() {
     super.initState();
     _loadInitialData();
+    _loadDeviceIdAndGuid();
   }
 
   Future<void> _loadInitialData() async {
@@ -1020,19 +1031,31 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
   }
 
+  Future<void> _loadDeviceIdAndGuid() async {
+    try {
+      final authService = AuthService();
+      final deviceId = await authService.getDeviceId();
+      final guid = await authService.getGUID();
+      setState(() {
+        _deviceId = deviceId;
+        _guid = guid;
+      });
+    } catch (e) {
+      print('Ошибка при загрузке deviceId и guid: $e');
+    }
+  }
+
   Future<void> _pickImage() async {
     final pickedFile = await picker.pickImage(source: ImageSource.gallery);
     if (pickedFile != null) {
       final file = File(pickedFile.path);
       final size = await file.length();
-
       if (size > _maxImageSizeInBytes) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Фото слишком большое. Максимум 2 МБ.')),
         );
         return;
       }
-
       setState(() {
         _photoBase64 = base64Encode(file.readAsBytesSync());
       });
@@ -1053,7 +1076,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             },
             photoBase64: _photoBase64,
           );
-
           if (result['success'] == true) {
             ScaffoldMessenger.of(context)
                 .showSnackBar(SnackBar(content: Text('Профиль успешно обновлён')));
@@ -1102,7 +1124,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   String? _validateEmail(String? value) {
     if (value == null || value.isEmpty) return null;
-
     final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
     if (!emailRegex.hasMatch(value)) {
       return 'Введите корректный email';
@@ -1112,7 +1133,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   String? _validateLink(String? value, String platform) {
     if (value == null || value.isEmpty) return null;
-
     switch (platform) {
       case 'VK':
         final vkRegex = RegExp(r'^(https?:\/\/)?(www\.)?vk\.com\/[\w\.\-_%]+$', caseSensitive: false);
@@ -1133,13 +1153,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         }
         break;
     }
-
     return null;
   }
 
   String? _validatePhone(String? value) {
     if (value == null || value.isEmpty) return null;
-
     final phoneRegex = RegExp(r'^[0-9]+$');
     if (!phoneRegex.hasMatch(value)) {
       return 'Введите корректный номер телефона (только цифры)';
@@ -1155,14 +1173,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       );
       return;
     }
-
     if (currentPhone == _initialPhone) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Новый номер не отличается от текущего.')),
       );
       return;
     }
-
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (BuildContext context) {
@@ -1182,21 +1198,22 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         );
       },
     ) ?? false;
-
     if (!confirmed) return;
-
     try {
       final result = await PhoneEditService.editPhoneNumber(
         newPhone: currentPhone,
         step: 1,
       );
-
       if (result['success'] == true) {
         if (mounted) {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) => ConfirmPhoneScreen(newPhone: currentPhone),
+              builder: (context) => ConfirmPhoneScreen(
+                newPhone: currentPhone,
+                guid: _guid ?? '', // Используем значение по умолчанию, если guid null
+                deviceId: _deviceId ?? '', // Добавляем deviceId
+              ),
             ),
           );
         }
@@ -1232,34 +1249,29 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 validator: _validateEmail,
               ),
               SizedBox(height: 16),
-
               TextFormField(
                 controller: _vkController,
                 decoration: InputDecoration(labelText: 'Ссылка на VK'),
                 validator: (value) => _validateLink(value, 'VK'),
               ),
               SizedBox(height: 16),
-
               TextFormField(
                 controller: _telegramController,
                 decoration: InputDecoration(labelText: 'Ссылка на Telegram'),
                 validator: (value) => _validateLink(value, 'Telegram'),
               ),
               SizedBox(height: 16),
-
               TextFormField(
                 controller: _whatsappController,
                 decoration: InputDecoration(labelText: 'Ссылка на WhatsApp'),
                 validator: (value) => _validateLink(value, 'WhatsApp'),
               ),
               SizedBox(height: 16),
-
               ElevatedButton.icon(
                 onPressed: _pickImage,
                 icon: Icon(Icons.photo_library),
                 label: Text('Выбрать фото'),
               ),
-
               if (_photoBase64 != null)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 16.0),
@@ -1276,16 +1288,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     ),
                   ),
                 ),
-
               SizedBox(height: 24),
-
               ElevatedButton.icon(
                 onPressed: _saveProfile,
                 icon: Icon(Icons.save),
                 label: Text('Сохранить'),
               ),
               SizedBox(height: 16),
-
               TextFormField(
                 controller: _phoneController,
                 decoration: InputDecoration(labelText: 'Номер телефона'),
@@ -1294,7 +1303,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 validator: _validatePhone,
               ),
               SizedBox(height: 16),
-
               ElevatedButton.icon(
                 onPressed: _changePhoneNumber,
                 icon: Icon(Icons.phone),
@@ -1306,8 +1314,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       ),
     );
   }
-}
 
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _vkController.dispose();
+    _telegramController.dispose();
+    _whatsappController.dispose();
+    _phoneController.dispose();
+    super.dispose();
+  }
+}
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\forgot_password_screen.dart
 Content:
@@ -1407,18 +1424,28 @@ class _LoginScreenState extends State<LoginScreen> {
       final authService = AuthService();
       final result = await authService.newLogin(email, password, context);
       if (result['success'] == true) {
-        final deviceId = result['deviceId'];
         final guid = result['guid'];
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => ConfirmPhoneScreen(
-              newPhone: email,
-              deviceId: deviceId,
-              guid: guid,
+        final deviceId = result['deviceId'];
+        final askHim = result['askHim'];
+        if (askHim != null && askHim['oktell'] == true) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ConfirmPhoneScreen(
+                newPhone: email,
+                guid: guid,
+                deviceId: deviceId, // Передаем deviceId
+              ),
             ),
-          ),
-        );
+          );
+        } else {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => MainScreen(),
+            ),
+          );
+        }
       } else {
         throw Exception(result['error'] ?? 'Неверный логин или пароль');
       }
@@ -1497,7 +1524,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   decoration: TextDecoration.underline,
                 ),
               ),
-            ),
+            )
           ],
         ),
       ),
@@ -1553,21 +1580,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
-      // Выполняем повторную авторизацию при возвращении в приложение
-      _reauthorize();
-    }
-  }
-
-  Future<void> _reauthorize() async {
-    final authService = AuthService();
-    final isLoggedIn = await authService.reauthorizeByGuid();
-    if (!isLoggedIn) {
-      // Если повторная авторизация не удалась, выходим из приложения
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (context) => LoginScreen()),
-            (route) => false,
-      );
+      // Выполняем загрузку данных пользователя при возвращении в приложение
+      _loadUserData();
     }
   }
 
@@ -3018,13 +3032,31 @@ class AuthService {
           final data = json['data'];
           final askHim = data['askHim'];
           final oktell = askHim?['oktell'] ?? false;
-          if (askHim == null || !oktell) {
-            throw Exception('Ошибка при отправке кода подтверждения');
+          final guid = data['person']['guid'] as String?;
+          final deviceId = deviceInfo.deviceId; // Используем deviceId из данных устройства
+          if (guid == null || guid.isEmpty || deviceId.isEmpty) {
+            throw Exception('GUID или deviceId отсутствуют в ответе');
           }
-          final guid = data['person']['guid'];
-          final deviceId = deviceInfo.deviceId;
-          if (guid != null && guid.isNotEmpty && deviceId != null && deviceId.isNotEmpty) {
-            // Не сохраняем данные здесь, ждём подтверждения устройства
+          final personData = data['person'];
+          final employment = List<Map<String, dynamic>>.from(personData['employment'] ?? []);
+          final mainJob = employment.firstWhere(
+                (job) => job['type'] == 'Основное место работы',
+            orElse: () => {},
+          );
+          final userData = {
+            'guid': personData['guid'],
+            'firstName': personData['firstName'] ?? '',
+            'lastName': personData['lastName'] ?? '',
+            'patronymic': personData['patronymic'] ?? '',
+            'employment': employment,
+            'position': mainJob['post'] ?? '',
+            'organization': mainJob['organization_name'] ?? '',
+            'department': mainJob['department_name'] ?? '',
+            'mainOrganizationGuid': mainJob['organization_guid'] ?? '',
+          };
+          // Сохраняем данные здесь
+          await _saveCredentials(login, password, guid, deviceId);
+          if (askHim != null && oktell) {
             return {
               'success': true,
               'data': data,
@@ -3033,7 +3065,15 @@ class AuthService {
               'askHim': askHim,
             };
           } else {
-            throw Exception('GUID или deviceId отсутствуют в ответе');
+            // Если блока askHim нет, сразу сохраняем данные и переходим на главный экран
+            await _saveUserData(userData);
+            return {
+              'success': true,
+              'data': data,
+              'guid': guid,
+              'deviceId': deviceId,
+              'askHim': null,
+            };
           }
         } else {
           throw Exception(json['error'] ?? 'Неизвестная ошибка авторизации');
@@ -3047,7 +3087,7 @@ class AuthService {
     }
   }
 
-  Future<bool> confirmDevice({required String code, required String deviceId, required BuildContext context}) async {
+  Future<bool> confirmDevice({required String code, required String login, required String password, required String deviceId, required BuildContext context}) async {
     try {
       final guid = await getGUID();
       if (guid == null || guid.isEmpty) {
@@ -3098,7 +3138,7 @@ class AuthService {
             'employment': employment,
           };
           await _saveUserData(userData);
-          await _saveCredentials(person['email'], person['phone'], guid, deviceId);
+          await _saveCredentials(login, password, guid, deviceId);
           return true;
         } else {
           throw Exception(json['error'] ?? 'Ошибка подтверждения устройства');
@@ -3164,68 +3204,6 @@ class AuthService {
     await prefs.remove('password');
     await prefs.remove('deviceId');
     print('Данные пользователя удалены');
-  }
-
-  Future<bool> reauthorizeByGuid() async {
-    try {
-      final guid = await getGUID();
-      final email = await getEmail();
-      final password = await getPassword();
-      if (guid == null || guid.isEmpty || email == null || email.isEmpty || password == null || password.isEmpty) {
-        return false;
-      }
-      final uri = mwUri('authorization');
-      final bodyMap = {
-        "login": email,
-        "password": password,
-      };
-      final body = base64Encode(utf8.encode(jsonEncode(bodyMap)));
-      final headers = {
-        ...AuthService.baseHeaders,
-        'ma-guid': guid,
-      };
-      print('Повторная авторизация: $uri');
-      print('Headers: $headers');
-      print('Body: $body');
-      final response = await http.post(
-        uri,
-        headers: headers,
-        body: body,
-      ).timeout(Duration(seconds: 10));
-      print('Статус-код: ${response.statusCode}');
-      print('Ответ сервера: ${response.body}');
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body);
-        if (json['success'] == true && json['data'] != null) {
-          final data = json['data'];
-          final employment = List<Map<String, dynamic>>.from(data['employment'] ?? []);
-          final mainJob = employment.firstWhere(
-                (job) => job['type'] == 'Основное место работы',
-            orElse: () => {},
-          );
-          final userData = {
-            'guid': data['guid'],
-            'firstName': data['firstName'] ?? '',
-            'lastName': data['lastName'] ?? '',
-            'patronymic': data['patronymic'] ?? '',
-            'phone': data['phone'] ?? '',
-            'email': data['email'] ?? '',
-            'snils': data['snils'] ?? '',
-            'position': mainJob['post'] ?? '',
-            'organization': mainJob['organization_name'] ?? '',
-            'department': mainJob['department_name'] ?? '',
-            'mainOrganizationGuid': mainJob['organization_guid'] ?? '',
-            'employment': employment,
-          };
-          await _saveUserData(userData);
-          return true;
-        }
-      }
-      return false;
-    } catch (e) {
-      print('Ошибка при повторной авторизации: $e');
-      return false;
-    }
   }
 }
 

@@ -5,13 +5,13 @@ import '../screens/main_screen.dart';
 
 class ConfirmPhoneScreen extends StatefulWidget {
   final String newPhone;
-  final String? deviceId;
   final String? guid; // Добавляем параметр guid
+  final String? deviceId; // Добавляем параметр deviceId
   const ConfirmPhoneScreen({
     Key? key,
     required this.newPhone,
-    this.deviceId, // Делаем необязательным
-    this.guid, // Делаем необязательным
+    required this.guid, // Делаем обязательным
+    required this.deviceId, // Делаем обязательным
   }) : super(key: key);
 
   @override
@@ -29,9 +29,17 @@ class _ConfirmPhoneScreenState extends State<ConfirmPhoneScreen> {
       _errorMessage = '';
     });
     try {
-      final result = await AuthService().confirmDevice(
+      final authService = AuthService();
+      final email = await authService.getEmail();
+      final password = await authService.getPassword();
+      if (email == null || email.isEmpty || password == null || password.isEmpty) {
+        throw Exception('Email или пароль не найдены');
+      }
+      final result = await authService.confirmDevice(
         code: _codeController.text,
-        deviceId: widget.deviceId!,
+        login: email,
+        password: password,
+        deviceId: widget.deviceId!, // Используем переданный deviceId
         context: context,
       );
       if (result) {

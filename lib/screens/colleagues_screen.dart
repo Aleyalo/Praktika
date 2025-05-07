@@ -1,3 +1,4 @@
+// lib/screens/colleagues_screen.dart
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/colleagues_service.dart';
@@ -184,11 +185,9 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
   void _updateColleaguesList(List<Colleague> colleagues) {
     var filteredColleagues = colleagues.where((colleague) =>
         colleague.name.toLowerCase().contains(_searchQuery)).toList();
-
     if (_showOnlyAuthorized) {
       filteredColleagues = filteredColleagues.where((colleague) => colleague.auth).toList();
     }
-
     print('Filtered colleagues after search: $filteredColleagues');
     filteredColleagues.sort((a, b) {
       if (a.selected && !b.selected) return -1;
@@ -207,7 +206,6 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
     print('_departments: $_departments');
     print('_selectedDepartmentGuid: $_selectedDepartmentGuid');
     print('_showOnlyAuthorized: $_showOnlyAuthorized');
-
     return Scaffold(
       appBar: AppBar(
         title: Text('Коллеги'),
@@ -223,7 +221,6 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                   String? newDepValue = _selectedDepartmentGuid;
                   List<Department> dialogDepartments = _departments;
                   bool showOnlyAuthorized = _showOnlyAuthorized;
-
                   return StatefulBuilder(
                     builder: (context, setState) {
                       return AlertDialog(
@@ -239,7 +236,7 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                                   final orgName = org['organization_name'] as String;
                                   return DropdownMenuItem<String>(
                                     value: orgGuid,
-                                    child: Text(orgName),
+                                    child: _buildTruncatedText(orgName),
                                   );
                                 }).toList(),
                                 onChanged: (String? value) async {
@@ -273,7 +270,7 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                                     print('Adding department to dropdown: ${dep.guid} - ${dep.name}');
                                     return DropdownMenuItem<String>(
                                       value: dep.guid,
-                                      child: Text(dep.name),
+                                      child: _buildTruncatedText(dep.name),
                                     );
                                   }).toList(),
                                   onChanged: (String? value) {
@@ -357,11 +354,9 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
               builder: (context, colleagues, child) {
                 var filteredColleagues = colleagues.where((colleague) =>
                     colleague.name.toLowerCase().contains(_searchQuery)).toList();
-
                 if (_showOnlyAuthorized) {
                   filteredColleagues = filteredColleagues.where((colleague) => colleague.auth).toList();
                 }
-
                 print('Filtered colleagues in builder: $filteredColleagues');
                 filteredColleagues.sort((a, b) {
                   if (a.selected && !b.selected) return -1;
@@ -369,7 +364,6 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                   return a.name.compareTo(b.name);
                 });
                 print('Sorted colleagues in builder: $filteredColleagues');
-
                 return filteredColleagues.isEmpty
                     ? Center(child: Text('Коллег нет'))
                     : ListView.builder(
@@ -413,6 +407,18 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildTruncatedText(String text) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final maxCharacters = (screenWidth / 10).toInt(); // Пример: 1 символ примерно 10 пикселей
+    return Text(
+      text,
+      overflow: TextOverflow.ellipsis,
+      maxLines: 1,
+      softWrap: false,
+      style: TextStyle(fontSize: 16),
     );
   }
 }

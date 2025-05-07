@@ -37,21 +37,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
-      // Выполняем повторную авторизацию при возвращении в приложение
-      _reauthorize();
-    }
-  }
-
-  Future<void> _reauthorize() async {
-    final authService = AuthService();
-    final isLoggedIn = await authService.reauthorizeByGuid();
-    if (!isLoggedIn) {
-      // Если повторная авторизация не удалась, выходим из приложения
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (context) => LoginScreen()),
-            (route) => false,
-      );
+      // Выполняем загрузку данных пользователя при возвращении в приложение
+      _loadUserData();
     }
   }
 

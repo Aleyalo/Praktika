@@ -1,3 +1,4 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
 import './screens/login_screen.dart'; // Импорт экрана входа
 import './screens/main_screen.dart'; // Импорт главного экрана
