@@ -1,15 +1,18 @@
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
-
+import '../screens/login_screen.dart'; // Добавлен импорт
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
+import 'package:flutter/material.dart';
 class NewsService {
-  static const String _baseUrl = 'mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
 
-  static Map<String, String> _getHeaders(String guid) {
+  static Map<String, String> _getHeaders(String guid, String deviceId) {
     return {
-      ...AuthService.baseHeaders,
+      ...AppConstants.baseHeaders,
       'ma-guid': guid,
+      'deviceId': deviceId, // Добавляем deviceId
     };
   }
 
@@ -19,11 +22,14 @@ class NewsService {
     DateTime? startDate,
     DateTime? endDate,
     String? searchQuery,
+    required BuildContext context, // Добавляем контекст
   }) async {
     try {
-      final guid = await AuthService().getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID не найден');
+      final authService = AuthService();
+      final guid = await authService.getGUID();
+      final deviceId = await authService.getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID или deviceId не найдены');
       }
       final uri = Uri(
         scheme: 'https',
@@ -39,7 +45,7 @@ class NewsService {
         },
       );
       print('Запрос к URI: $uri');
-      final response = await http.get(uri, headers: _getHeaders(guid));
+      final response = await http.get(uri, headers: _getHeaders(guid, deviceId));
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
         if (json['success'] == true && json['data'] != null) {
@@ -48,6 +54,14 @@ class NewsService {
           } else {
             throw Exception('Некорректный формат данных: "data" не является списком');
           }
+        } else if (json['error'] == 'Выход на других устройствах.') {
+          await authService.logout();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => LoginScreen()),
+                (route) => false,
+          );
+          throw Exception('Вы вышли со всех устройств');
         } else {
           throw Exception('Ошибка в структуре ответа: ${json['error']}');
         }

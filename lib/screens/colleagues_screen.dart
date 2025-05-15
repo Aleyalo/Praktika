@@ -1,4 +1,3 @@
-// lib/screens/colleagues_screen.dart
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/colleagues_service.dart';
@@ -102,12 +101,13 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
     }
   }
 
-  Future<void> _loadDepartments(String organizationGuid) async {
+  Future<void> _loadDepartments(String organizationGuid, BuildContext context) async {
     try {
       print('Loading departments for organization GUID: $organizationGuid');
       final service = DepartmentsService();
       final departments = await service.getDepartments(
         organizationGuid: organizationGuid,
+        context: context, // Добавляем контекст
       );
       print('Departments loaded: $departments');
       if (departments.isEmpty) {
@@ -167,9 +167,9 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
       final favoritesService = FavoritesService();
       final isCurrentlySelected = colleague.selected;
       if (isCurrentlySelected) {
-        await favoritesService.removeFromFavorites(colleague.guid);
+        await favoritesService.removeFromFavorites(guidSelected: colleague.guid, context: context); // Передаем контекст
       } else {
-        await favoritesService.addToFavorites(colleague.guid);
+        await favoritesService.addToFavorites(guidSelected: colleague.guid, context: context); // Передаем контекст
       }
       setState(() {
         colleague.selected = !isCurrentlySelected;
@@ -248,14 +248,11 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                                     });
                                     return;
                                   }
-                                  final service = DepartmentsService();
-                                  final departments = await service.getDepartments(
-                                    organizationGuid: value,
-                                  );
+                                  await _loadDepartments(value, context); // Передаем контекст
                                   setState(() {
                                     newOrgValue = value;
                                     newDepValue = null;
-                                    dialogDepartments = departments;
+                                    dialogDepartments = _departments;
                                   });
                                 },
                                 decoration: InputDecoration(
@@ -411,14 +408,15 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
   }
 
   Widget _buildTruncatedText(String text) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final maxCharacters = (screenWidth / 10).toInt(); // Пример: 1 символ примерно 10 пикселей
-    return Text(
-      text,
-      overflow: TextOverflow.ellipsis,
-      maxLines: 1,
-      softWrap: false,
-      style: TextStyle(fontSize: 16),
+    return Container(
+      constraints: BoxConstraints(maxWidth: 250), // Ограничиваем максимальную ширину
+      child: Text(
+        text,
+        overflow: TextOverflow.ellipsis,
+        maxLines: 1,
+        softWrap: false,
+        style: TextStyle(fontSize: 16),
+      ),
     );
   }
 }

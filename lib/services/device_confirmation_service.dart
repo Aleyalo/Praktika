@@ -1,16 +1,16 @@
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
-import 'device_info_service.dart'; // Добавляем импорт DeviceInfoService
 import 'package:flutter/material.dart'; // Для BuildContext
 import '../../utils/constants.dart';
+
 class DeviceConfirmationService {
   static const String _baseUrl = AppConstants.baseUrl;
   static const int _port = AppConstants.port;
 
   static Future<Map<String, dynamic>> confirmDevice({
     required String code,
-    required String deviceId, // Добавляем deviceId как параметр
+    required String deviceId, // deviceId уже передается как параметр
   }) async {
     try {
       final guid = await AuthService().getGUID();
@@ -26,7 +26,7 @@ class DeviceConfirmationService {
         path: '/hrm/hs/ewp/device_confirmed',
       );
       final headers = {
-        ...AuthService.baseHeaders,
+        ...AppConstants.baseHeaders,
         'ma-guid': guid,
         'deviceId': deviceId,
       };

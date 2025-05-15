@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/privacy_service.dart';
 import '../utils/error_handler.dart';
 import 'package:collection/collection.dart';
+
 class PrivacySettingsScreen extends StatefulWidget {
   @override
   _PrivacySettingsScreenState createState() => _PrivacySettingsScreenState();
@@ -37,16 +38,17 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
   Future<void> _saveSettings() async {
     // Сравниваем значения вручную
     bool settingsEqual = MapEquality().equals(_currentSettings, _editedSettings);
-
     if (settingsEqual) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Настройки не изменились')),
       );
       return;
     }
-
     try {
-      final success = await PrivacyService().updatePrivacySettings(_editedSettings);
+      final success = await PrivacyService().updatePrivacySettings(
+        settings: _editedSettings,
+        context: context, // Передаем контекст
+      );
       if (success) {
         setState(() {
           _currentSettings = Map.from(_editedSettings);
@@ -83,7 +85,6 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
                   _buildSettingTile("Скрыть номер телефона", "number"),
                   _buildSettingTile("Скрыть почту", "mail"),
                   _buildSettingTile("Скрыть ссылки", "links"),
-
                   // Кнопка "Сохранить" — справа, на уровне других пунктов
                   Align(
                     alignment: Alignment.centerRight,

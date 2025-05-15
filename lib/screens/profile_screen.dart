@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/auth_service.dart';
 import '../services/profile_service.dart';
 import 'dart:convert';
-import 'dart:typed_data';
-import 'package:url_launcher/url_launcher.dart';
 
 class ProfileScreen extends StatefulWidget {
   final Map<String, dynamic> user;
@@ -16,39 +15,21 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   late Future<Map<String, dynamic>> _profileFuture;
 
-  Future<Map<String, dynamic>> _fetchProfileData() async {
+  Future<Map<String, dynamic>> _fetchProfileData(BuildContext context) async {
     try {
       print('Fetching profile data...');
       final authService = AuthService();
       final userData = await authService.getUserData();
       print('User data from auth service: $userData');
       final profileService = ProfileService();
-      final profileData = await profileService.getProfile();
+      final profileData = await profileService.getProfile(context); // Передаем контекст
       print('Profile data from profile service: $profileData');
-
-      // Find main job
-      final employment = List<Map<String, dynamic>>.from(userData['employment'] ?? []);
-      print('Employment data: $employment');
-      Map<String, dynamic> mainJob = {};
-      try {
-        mainJob = employment.firstWhere(
-              (job) => job['type'] == 'Основное место работы',
-          orElse: () => {},
-        );
-      } catch (e) {
-        print('Error finding main job: $e');
-      }
-
       // Combine data with priority to profile data
       final combinedData = {
         ...userData,
         ...profileData,
         'fullName': profileData['fullName'] ??
             '${userData['surname']} ${userData['name']} ${userData['patronymic']}'.trim(),
-        'position': mainJob['post'] ?? '',
-        'organization': mainJob['organization_name'] ?? '',
-        'department': mainJob['department_name'] ?? '',
-        'mainJob': mainJob,
       };
       print('Combined profile data: $combinedData');
       return combinedData;
@@ -61,7 +42,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
-    _profileFuture = _fetchProfileData();
+    _profileFuture = _fetchProfileData(context); // Передаем контекст
   }
 
   Future<void> _launchUrl(String label, String url) async {
@@ -71,33 +52,48 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
       return;
     }
-
     Uri? uri;
-
     // Автоматическое определение типа ссылки и её коррекция
-    if (label.toLowerCase() == 'vk' && !url.startsWith('http')) {
-      uri = Uri.parse('https://vk.com/$url');
+    if (label.toLowerCase() == 'vk' && !url.startsWith('https://vk.com/ ')) {
+      uri = Uri.parse('https://vk.com/ ${url.replaceAll('@', '')}');
     } else if (label.toLowerCase() == 'telegram' && !url.startsWith('tg://')) {
-      uri = Uri.parse('tg://resolve?domain=$url');
-    } else if (label.toLowerCase() == 'whatsapp' && !url.startsWith('https')) {
-      uri = Uri.parse('https://wa.me/$url');
+      uri = Uri.parse('tg://resolve?domain=${url.replaceAll('@', '')}');
+    } else if (label.toLowerCase() == 'whatsapp' && !url.startsWith('https://')) {
+      uri = Uri.parse('https://wa.me/ ${url.replaceAll('+', '')}');
     } else if (url.startsWith('www.') || url.contains('.com') || url.contains('.ru')) {
       uri = Uri.parse('https://$url');
     } else {
       uri = Uri.tryParse(url);
     }
-
-    if (uri != null && await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
-      final fallbackUri = uri ?? Uri.parse('https://$url');
-      if (await canLaunchUrl(fallbackUri)) {
-        await launchUrl(fallbackUri, mode: LaunchMode.externalApplication);
+    if (uri != null) {
+      if (label.toLowerCase() == 'vk') {
+        // Попытка открыть ссылку в приложении ВКонтакте
+        final vkAppUri = Uri.parse('vk://vk.com/${url.replaceAll('@', '')}');
+        if (await canLaunchUrl(vkAppUri)) {
+          await launchUrl(vkAppUri, mode: LaunchMode.externalApplication);
+        } else {
+          // Если приложение ВКонтакте не установлено, открываем ссылку в браузере
+          if (await canLaunchUrl(uri)) {
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Не удалось открыть ссылку')),
+            );
+          }
+        }
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Не удалось открыть ссылку')),
-        );
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Не удалось открыть ссылку')),
+          );
+        }
       }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось открыть ссылку')),
+      );
     }
   }
 
@@ -143,23 +139,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   if (userData['phone']?.toString().isNotEmpty == true)
                     ProfileField(label: 'Телефон', value: userData['phone']?.toString() ?? ''),
                   const SizedBox(height: 20),
-                  Text(
-                    'Основное место работы',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  ProfileField(
-                    label: 'Организация',
-                    value: userData['organization']?.toString() ?? 'Не указано',
-                  ),
-                  ProfileField(
-                    label: 'Подразделение',
-                    value: userData['department']?.toString() ?? 'Не указано',
-                  ),
-                  ProfileField(
-                    label: 'Должность',
-                    value: userData['position']?.toString() ?? 'Не указано',
-                  ),
-                  const SizedBox(height: 20),
                   if (userData['links'] != null && userData['links'] is Map<String, dynamic>)
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -173,6 +152,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ProfileLink(label: entry.key, url: entry.value, launchUrl: (l, u) => _launchUrl(l, u))).toList(),
                       ],
                     ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Места работы',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 10),
+                  ..._buildEmploymentList(userData['employment']),
                 ],
               ),
             );
@@ -181,12 +167,48 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
     );
   }
+
+  List<Widget> _buildEmploymentList(List<dynamic>? employment) {
+    if (employment == null || employment.isEmpty) {
+      return [Text('Нет информации о местах работы')];
+    }
+    // Находим основное место работы
+    final mainJob = employment.firstWhere(
+          (job) => job['type'] == 'Основное место работы',
+      orElse: () => null,
+    );
+    // Создаём список всех мест работы
+    final allJobs = employment.toList();
+    // Если основное место работы найдено, удаляем его из списка всех мест работы
+    if (mainJob != null) {
+      allJobs.remove(mainJob);
+    }
+    // Добавляем основное место работы в начало списка
+    if (mainJob != null) {
+      allJobs.insert(0, mainJob);
+    }
+    return allJobs.map((job) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${job['organization_name']} - ${job['department_name']} (${job['type']})',
+            style: TextStyle(fontSize: 16),
+          ),
+          Text(
+            job['post'],
+            style: TextStyle(fontSize: 14, color: Colors.grey),
+          ),
+          const SizedBox(height: 10),
+        ],
+      );
+    }).toList();
+  }
 }
 
 class ProfileField extends StatelessWidget {
   final String label;
   final String value;
-
   const ProfileField({Key? key, required this.label, required this.value}) : super(key: key);
 
   @override
@@ -215,7 +237,6 @@ class ProfileLink extends StatelessWidget {
   final String label;
   final String url;
   final Function(String, String) launchUrl;
-
   const ProfileLink({
     Key? key,
     required this.label,

@@ -1,11 +1,9 @@
-// lib/repositories/colleagues_repository.dart
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../services/auth_service.dart';
-import '../utils/constants.dart';
 
 class ColleaguesRepository {
-  static const String _baseUrl = 'https://mw.azs-topline.ru';
+  static const String _baseUrl = 'https://mw.azs-topline.ru ';
   static const int _port = 44445;
 
   Future<List<Map<String, dynamic>>> fetchColleagues({

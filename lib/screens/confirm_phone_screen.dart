@@ -1,4 +1,3 @@
-// lib/screens/confirm_phone_screen.dart
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../screens/main_screen.dart';
@@ -7,11 +6,15 @@ class ConfirmPhoneScreen extends StatefulWidget {
   final String newPhone;
   final String? guid; // Добавляем параметр guid
   final String? deviceId; // Добавляем параметр deviceId
+  final bool isRecovery; // Добавляем параметр isRecovery для восстановления доступа
+  final Function(String code)? onConfirm; // Добавляем функцию для подтверждения номера телефона
   const ConfirmPhoneScreen({
     Key? key,
     required this.newPhone,
     required this.guid, // Делаем обязательным
     required this.deviceId, // Делаем обязательным
+    this.isRecovery = false, // По умолчанию false
+    this.onConfirm, // Добавляем функцию для подтверждения номера телефона
   }) : super(key: key);
 
   @override
@@ -29,34 +32,36 @@ class _ConfirmPhoneScreenState extends State<ConfirmPhoneScreen> {
       _errorMessage = '';
     });
     try {
-      final authService = AuthService();
-      final email = await authService.getEmail();
-      final password = await authService.getPassword();
-      if (email == null || email.isEmpty || password == null || password.isEmpty) {
-        throw Exception('Email или пароль не найдены');
-      }
-      final result = await authService.confirmDevice(
-        code: _codeController.text,
-        login: email,
-        password: password,
-        deviceId: widget.deviceId!, // Используем переданный deviceId
-        context: context,
-      );
-      if (result) {
-        Navigator.pop(context, true);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Номер телефона успешно подтверждён')),
-        );
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => MainScreen()),
-        );
+      if (widget.onConfirm != null) {
+        await widget.onConfirm!(_codeController.text);
       } else {
-        setState(() {
-          _errorMessage = 'Код подтверждения неверен';
-        });
+        final authService = AuthService();
+        final result = await authService.confirmDevice(
+          code: _codeController.text,
+          login: '', // Логин не нужен для подтверждения номера
+          password: '', // Пароль не нужен для подтверждения номера
+          deviceId: widget.deviceId!,
+          context: context,
+        );
+        if (result) {
+          print('Код подтверждения успешно подтвержден');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Номер телефона успешно подтвержден')),
+          );
+          Navigator.pop(context, true);
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => MainScreen()),
+          );
+        } else {
+          print('Код подтверждения неверен');
+          setState(() {
+            _errorMessage = 'Код подтверждения неверен';
+          });
+        }
       }
     } catch (e) {
+      print('Произошла ошибка при подтверждении кода: $e');
       setState(() {
         _errorMessage = 'Произошла ошибка: $e';
       });

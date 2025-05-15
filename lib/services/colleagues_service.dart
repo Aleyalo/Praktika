@@ -2,10 +2,11 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
 import '../models/colleague.dart';
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
 
 class ColleaguesService {
-  static const String _baseUrl = 'mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
 
   Future<List<Colleague>> getColleagues({
     String? organizationGuid,
@@ -13,10 +14,10 @@ class ColleaguesService {
   }) async {
     try {
       final guid = await AuthService().getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID не найден');
+      final deviceId = await AuthService().getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID или deviceId не найдены');
       }
-      // Формируем queryParameters только если параметры переданы
       final Map<String, String> queryParameters = {};
       if (organizationGuid != null && organizationGuid.isNotEmpty) {
         queryParameters['guidorg'] = organizationGuid;
@@ -35,8 +36,9 @@ class ColleaguesService {
       final response = await http.get(
         uri,
         headers: {
-          ...AuthService.baseHeaders,
+          ...AppConstants.baseHeaders,
           'ma-guid': guid,
+          'deviceId': deviceId, // Добавляем deviceId
         },
       ).timeout(Duration(seconds: 10));
       print('Статус-код ответа: ${response.statusCode}');
@@ -50,6 +52,9 @@ class ColleaguesService {
               .toList();
           print('Получен список коллег: $colleagues');
           return colleagues;
+        } else if (json['error'] == 'Выход на других устройствах.') {
+          await AuthService().logout();
+          throw Exception('Вы вышли со всех устройств');
         } else {
           throw Exception('Ошибка в структуре ответа: ${json['error']}');
         }

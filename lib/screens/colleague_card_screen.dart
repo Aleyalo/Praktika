@@ -15,7 +15,7 @@ class ColleagueCardScreen extends StatelessWidget {
         backgroundColor: Colors.yellow,
       ),
       body: FutureBuilder<Map<String, dynamic>>(
-        future: _fetchColleagueData(),
+        future: _fetchColleagueData(context), // Передаем контекст
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return Center(child: CircularProgressIndicator());
@@ -56,7 +56,7 @@ class ColleagueCardScreen extends StatelessWidget {
                   const SizedBox(height: 10),
                   if (colleagueData['links'] != null && colleagueData['links'] is Map<String, dynamic>)
                     ...colleagueData['links'].entries.map((entry) {
-                      return LinkItem(label: entry.key, url: entry.value);
+                      return LinkItem(label: entry.key, url: entry.value, launchUrl: _launchUrl);
                     }).toList(),
                   Text(
                     'Места работы',
@@ -93,13 +93,65 @@ class ColleagueCardScreen extends StatelessWidget {
     );
   }
 
-  Future<Map<String, dynamic>> _fetchColleagueData() async {
+  Future<Map<String, dynamic>> _fetchColleagueData(BuildContext context) async {
     try {
       final service = ColleagueCardService();
-      return await service.getColleagueCard(guidCollegue: colleagueGuid);
+      return await service.getColleagueCard(guidCollegue: colleagueGuid, context: context); // Передаем контекст
     } catch (e) {
       print('Ошибка при загрузке данных коллеги: $e');
       return {};
+    }
+  }
+
+  void _launchUrl(BuildContext context, String label, String url) async {
+    if (url.isEmpty || url == label || url == '1') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Нет доступной ссылки для $label')),
+      );
+      return;
+    }
+    Uri? uri;
+    // Автоматическое определение типа ссылки и её коррекция
+    if (label.toLowerCase() == 'vk' && !url.startsWith('https://vk.com/ ')) {
+      uri = Uri.parse('https://vk.com/ ${url.replaceAll('@', '')}');
+    } else if (label.toLowerCase() == 'telegram' && !url.startsWith('tg://')) {
+      uri = Uri.parse('tg://resolve?domain=${url.replaceAll('@', '')}');
+    } else if (label.toLowerCase() == 'whatsapp' && !url.startsWith('https://')) {
+      uri = Uri.parse('https://wa.me/ ${url.replaceAll('+', '')}');
+    } else if (url.startsWith('www.') || url.contains('.com') || url.contains('.ru')) {
+      uri = Uri.parse('https://$url');
+    } else {
+      uri = Uri.tryParse(url);
+    }
+    if (uri != null) {
+      if (label.toLowerCase() == 'vk') {
+        // Попытка открыть ссылку в приложении ВКонтакте
+        final vkAppUri = Uri.parse('vk://vk.com/${url.replaceAll('@', '')}');
+        if (await canLaunchUrl(vkAppUri)) {
+          await launchUrl(vkAppUri, mode: LaunchMode.externalApplication);
+        } else {
+          // Если приложение ВКонтакте не установлено, открываем ссылку в браузере
+          if (await canLaunchUrl(uri)) {
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Не удалось открыть ссылку')),
+            );
+          }
+        }
+      } else {
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Не удалось открыть ссылку')),
+          );
+        }
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось открыть ссылку')),
+      );
     }
   }
 }
@@ -107,7 +159,6 @@ class ColleagueCardScreen extends StatelessWidget {
 class ProfileField extends StatelessWidget {
   final String label;
   final String value;
-
   const ProfileField({Key? key, required this.label, required this.value}) : super(key: key);
 
   @override
@@ -118,7 +169,10 @@ class ProfileField extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.start,
         children: [
           Expanded(
-            child: Text('$label:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            child: Text(
+              '$label:',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
           ),
           Text(value, style: TextStyle(fontSize: 16)),
         ],
@@ -130,8 +184,8 @@ class ProfileField extends StatelessWidget {
 class LinkItem extends StatelessWidget {
   final String label;
   final String url;
-
-  const LinkItem({Key? key, required this.label, required this.url}) : super(key: key);
+  final void Function(BuildContext, String, String) launchUrl;
+  const LinkItem({Key? key, required this.label, required this.url, required this.launchUrl}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -141,10 +195,13 @@ class LinkItem extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.start,
         children: [
           Expanded(
-            child: Text('$label:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            child: Text(
+              '$label:',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
           ),
           GestureDetector(
-            onTap: () => _launchUrl(context, label, url),
+            onTap: () => launchUrl(context, label, url),
             child: Text(
               url,
               style: TextStyle(fontSize: 16, color: Colors.blue, decoration: TextDecoration.underline),
@@ -153,41 +210,5 @@ class LinkItem extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  Future<void> _launchUrl(BuildContext context, String label, String url) async {
-    if (url.isEmpty || url == label || url == '1') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Нет доступной ссылки для $label')),
-      );
-      return;
-    }
-
-    Uri? uri;
-
-    if (label.toLowerCase() == 'vk' && !url.startsWith('http')) {
-      uri = Uri.parse('https://vk.com/$url');
-    } else if (label.toLowerCase() == 'telegram' && !url.startsWith('tg://')) {
-      uri = Uri.parse('tg://resolve?domain=$url');
-    } else if (label.toLowerCase() == 'whatsapp' && !url.startsWith('https')) {
-      uri = Uri.parse('https://wa.me/$url');
-    } else if (url.startsWith('www.') || url.contains('.com') || url.contains('.ru')) {
-      uri = Uri.parse('https://$url');
-    } else {
-      uri = Uri.tryParse(url);
-    }
-
-    if (uri != null && await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
-      final fallbackUri = uri ?? Uri.parse('https://$url');
-      if (await canLaunchUrl(fallbackUri)) {
-        await launchUrl(fallbackUri, mode: LaunchMode.externalApplication);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Не удалось открыть ссылку')),
-        );
-      }
-    }
   }
 }

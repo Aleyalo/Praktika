@@ -2,19 +2,23 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/department.dart';
 import '../services/auth_service.dart';
-
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
+import '../screens/login_screen.dart';
+import 'package:flutter/material.dart';
 class DepartmentsService {
-  static const String _baseUrl = 'mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
 
   Future<List<Department>> getDepartments({
     required String organizationGuid,
+    required BuildContext context,
   }) async {
     try {
       print('Getting departments for organization: $organizationGuid');
       final userGuid = await AuthService().getGUID();
-      if (userGuid == null || userGuid.isEmpty) {
-        throw Exception('GUID пользователя не найден');
+      final deviceId = await AuthService().getDeviceId(); // Получаем deviceId
+      if (userGuid == null || userGuid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID пользователя или deviceId не найдены');
       }
       final uri = Uri(
         scheme: 'https',
@@ -23,9 +27,10 @@ class DepartmentsService {
         path: '/hrm/hs/ewp/departments',
       );
       final headers = {
-        ...AuthService.baseHeaders,
+        ...AppConstants.baseHeaders,
         'ma-guid': userGuid,
         'guid-org': organizationGuid,
+        'deviceId': deviceId, // Добавляем deviceId
       };
       print('Request headers: $headers');
       final response = await http.get(
@@ -48,6 +53,14 @@ class DepartmentsService {
             }
           }).toList();
           return departments.where((d) => d.guid.isNotEmpty).toList();
+        } else if (json['error'] == 'Выход на других устройствах.') {
+          await AuthService().logout();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => LoginScreen()),
+                (route) => false,
+          );
+          throw Exception('Вы вышли со всех устройств');
         } else {
           throw Exception(json['error'] ?? 'Неизвестная ошибка');
         }

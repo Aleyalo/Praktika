@@ -34,16 +34,18 @@ dependencies:
   device_info_plus: ^9.0.0
   shared_preferences: ^2.2.0
   cached_network_image: ^3.2.0
+  package_info_plus: ^4.0.0 # Убедитесь, что версия совпадает
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   image_picker: ^0.8.7+4
   url_launcher: ^6.0.3
   collection: ^1.15.0 # Добавляем эту строку
-  intl: ^0.17.0 # Добавляем пакет intl для форматирования даты
   qr_flutter: ^4.1.0
-flutter_localizations: # Для локализации календаря
+  flutter_localizations: # Для локализации календаря
     sdk: flutter
+intl: ^0.17.0 # Добавляем пакет intl для форматирования даты
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

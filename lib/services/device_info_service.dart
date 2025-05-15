@@ -1,33 +1,54 @@
-// lib/services/device_info_service.dart
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart'; // Для BuildContext и платформы
 import '../../models/device_info.dart';
+import 'package:package_info_plus/package_info_plus.dart'; // Импортируем package_info_plus для получения версии приложения
 
 class DeviceInfoService {
-  static Future<DeviceInfo> getDeviceInfo(BuildContext context) async {
+  static Future<DeviceInfo> getDeviceInfo(BuildContext? context) async {
     final deviceInfoPlugin = DeviceInfoPlugin();
-    if (Theme.of(context).platform == TargetPlatform.android) {
-      final androidInfo = await deviceInfoPlugin.androidInfo;
-      final deviceInfo = DeviceInfo(
-        os: 'Android',
-        brief: 'Android ${androidInfo.version.release} (SDK ${androidInfo.version.sdkInt}), ${androidInfo.manufacturer} ${androidInfo.model}',
-        deviceId: androidInfo.id,
-        appVersion: '1.0.0', // Здесь можно использовать версию приложения
-      );
-      print('Собранная информация об устройстве: ${deviceInfo.toJson()}'); // Добавляем логирование
-      return deviceInfo;
-    } else if (Theme.of(context).platform == TargetPlatform.iOS) {
-      final iosInfo = await deviceInfoPlugin.iosInfo;
-      final deviceInfo = DeviceInfo(
-        os: 'iOS',
-        brief: 'iOS ${iosInfo.systemVersion}, ${iosInfo.model}',
-        deviceId: iosInfo.identifierForVendor!,
-        appVersion: '1.0.0', // Здесь можно использовать версию приложения
-      );
-      print('Собранная информация об устройстве: ${deviceInfo.toJson()}'); // Добавляем логирование
-      return deviceInfo;
+    String os;
+    String brief;
+    String deviceId;
+    String appVersion;
+
+    if (context != null) {
+      if (Theme.of(context).platform == TargetPlatform.android) {
+        final androidInfo = await deviceInfoPlugin.androidInfo;
+        os = 'Android';
+        brief = 'Android ${androidInfo.version.release} (SDK ${androidInfo.version.sdkInt})';
+        deviceId = androidInfo.id;
+      } else if (Theme.of(context).platform == TargetPlatform.iOS) {
+        final iosInfo = await deviceInfoPlugin.iosInfo;
+        os = 'iOS';
+        brief = 'iOS ${iosInfo.systemVersion}';
+        deviceId = iosInfo.identifierForVendor!;
+      } else {
+        throw UnsupportedError('Unsupported platform');
+      }
     } else {
-      throw UnsupportedError('Unsupported platform');
+      // Если контекста нет, используем стандартные значения или получаем deviceId из SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      deviceId = prefs.getString('deviceId') ?? '';
+      if (deviceId.isEmpty) {
+        throw Exception('deviceId не найден');
+      }
+      os = 'Android'; // Предполагаем, что устройство Android, если контекст отсутствует
+      brief = 'Android 13 (SDK 33)'; // Используем стандартные значения
     }
+
+    // Получаем версию приложения
+    final packageInfo = await PackageInfo.fromPlatform();
+    appVersion = packageInfo.version;
+
+    final deviceInfo = DeviceInfo(
+      os: os,
+      brief: brief,
+      deviceId: deviceId,
+      appVersion: appVersion,
+    );
+
+    print('Собранная информация об устройстве: ${deviceInfo.toJson()}'); // Добавляем логирование
+    return deviceInfo;
   }
 }

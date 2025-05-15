@@ -1,12 +1,13 @@
-// lib/screens/registration_screen.dart
 import 'package:flutter/material.dart';
-import 'package:flutter/gestures.dart';
+import 'package:flutter/cupertino.dart'; // Импортируем cupertino для CupertinoDatePicker
+import 'package:intl/intl.dart'; // Для форматирования даты
 import '../services/moderation_service.dart'; // Импортируем ModerationService
 import '../utils/error_handler.dart'; // Для обработки ошибок
 import 'package:url_launcher/url_launcher.dart'; // Для работы с ссылками
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:intl/intl.dart'; // Для форматирования даты
+import '../services/auth_service.dart'; // Импортируем AuthService
+import 'package:flutter/gestures.dart'; // Добавляем импорт для TapGestureRecognizer
 
 class RegistrationScreen extends StatefulWidget {
   @override
@@ -17,7 +18,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _surnameController = TextEditingController();
   final TextEditingController _patronymicController = TextEditingController();
-  final TextEditingController _birthdateController = TextEditingController();
   final TextEditingController _snilsController = TextEditingController();
   final TextEditingController _loginController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
@@ -26,11 +26,36 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   String _userAgreementUrl = ''; // URL пользовательского соглашения
   String _consentPDUrl = ''; // URL согласия на обработку ПД
   final _formKey = GlobalKey<FormState>(); // Добавляем ключ для формы
+  DateTime? _selectedDate; // Добавляем переменную для хранения выбранной даты
+  String _errorMessage = ''; // Сообщение об ошибке
 
   @override
   void initState() {
     super.initState();
     _fetchAgreements(); // Загружаем ссылки на соглашения
+    _checkModerationStatus();
+  }
+
+  Future<void> _checkModerationStatus() async {
+    final moderationService = ModerationService();
+    final moderationGuid = await AuthService.getModerationGUID();
+    if (moderationGuid != null) {
+      try {
+        final moderationStatus = await moderationService.checkModerationStatus(moderationGuid);
+        if (moderationStatus['success'] == true) {
+          final status = moderationStatus['status'];
+          if (status == 'На модерации') {
+            setState(() {
+              _errorMessage = 'Дождитесь завершения предыдущей модерации';
+            });
+          } else {
+            await AuthService.clearModerationGUID(); // Удаляем GUID модерации, если статус не "На модерации"
+          }
+        }
+      } catch (e) {
+        print('Ошибка при проверке статуса модерации: $e');
+      }
+    }
   }
 
   Future<void> _fetchAgreements() async {
@@ -71,27 +96,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     return null;
   }
 
-  String? _validateBirthdate(String? value) {
-    if (value == null || value.isEmpty) {
-      return 'Обязательное поле';
-    }
-    final date = _parseDate(value);
-    if (date == null) {
-      return 'Неверный формат даты';
-    }
-    return null;
-  }
-
-  String? _validateSnils(String? value) {
-    if (value == null || value.isEmpty) {
-      return 'Обязательное поле';
-    }
-    final formattedSnils = _formatSnils(value);
-    if (formattedSnils == null) {
-      return 'Неверный формат СНИЛС';
-    }
-    if (!_isValidSnils(formattedSnils)) {
-      return 'Некорректный СНИЛС';
+  String? _validatePatronymic(String? value) {
+    if (value != null && value.isNotEmpty && value.contains(RegExp(r'[0-9]'))) {
+      return 'ФИО не может содержать числа';
     }
     return null;
   }
@@ -110,24 +117,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     return null;
   }
 
-  DateTime? _parseDate(String dateStr) {
-    final formats = ['dd.MM.yyyy', 'dd/MM/yyyy', 'yyyy-MM-dd'];
-    for (var format in formats) {
-      try {
-        return DateFormat(format).parse(dateStr);
-      } catch (_) {}
-    }
-    return null;
-  }
-
-  String? _formatDate(String dateStr) {
-    final date = _parseDate(dateStr);
-    if (date != null) {
-      return DateFormat('yyyyMMdd').format(date);
-    }
-    return null;
-  }
-
   String? _formatSnils(String snils) {
     final digits = snils.replaceAll(RegExp(r'\D'), '');
     if (digits.length != 11) {
@@ -136,54 +125,54 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     return '${digits.substring(0, 3)}-${digits.substring(3, 6)}-${digits.substring(6, 9)} ${digits.substring(9)}';
   }
 
-  bool _isValidSnils(String snils) {
-    final digits = snils.replaceAll(RegExp(r'\D'), '');
-    if (digits.length != 11) {
-      return false;
-    }
-    final controlNumber = int.parse(digits.substring(9));
-    final sum = digits.substring(0, 9).split('').asMap().entries.fold<int>(0, (sum, entry) {
-      final index = entry.key;
-      final digit = int.parse(entry.value);
-      return sum + digit * (9 - index);
-    });
-    int calculatedControlNumber;
-    if (sum < 100) {
-      calculatedControlNumber = sum;
-    } else if (sum == 100 || sum == 101) {
-      calculatedControlNumber = 0;
-    } else {
-      calculatedControlNumber = sum % 101;
-      if (calculatedControlNumber == 100) {
-        calculatedControlNumber = 0;
-      }
-    }
-    return controlNumber == calculatedControlNumber;
-  }
-
   Future<void> _registerUser(BuildContext context) async {
     if (_formKey.currentState?.validate() ?? false) {
-      final name = _nameController.text.trim();
-      final surname = _surnameController.text.trim();
-      final patronymic = _patronymicController.text.trim();
-      final birthdate = _formatDate(_birthdateController.text.trim()) ?? '';
-      final snils = _formatSnils(_snilsController.text.trim()) ?? '';
+      final moderationService = ModerationService();
+      final moderationGuid = await AuthService.getModerationGUID();
+      if (moderationGuid != null) {
+        try {
+          final moderationStatus = await moderationService.checkModerationStatus(moderationGuid);
+          if (moderationStatus['success'] == true) {
+            final status = moderationStatus['status'];
+            if (status == 'На модерации') {
+              setState(() {
+                _errorMessage = 'Дождитесь завершения предыдущей модерации';
+              });
+              return;
+            }
+          }
+        } catch (e) {
+          print('Ошибка при проверке статуса модерации: $e');
+        }
+      }
+      final name = _capitalizeFirstLetter(_nameController.text.trim());
+      final surname = _capitalizeFirstLetter(_surnameController.text.trim());
+      final patronymic = _capitalizeFirstLetter(_patronymicController.text.trim());
+      final birthdate = _formatDate(_selectedDate!, format: 'yyyyMMdd'); // Используем формат yyyyMMdd для отправки на сервер
+      final snilsControllerValue = _snilsController.text.trim();
+      final formattedSnils = _formatSnils(snilsControllerValue);
+      if (formattedSnils == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Неверный формат СНИЛС')),
+        );
+        return;
+      }
       final login = _loginController.text.trim();
       final password = _passwordController.text.trim();
       try {
-        final moderationService = ModerationService();
-        final response = await moderationService.registerUser(
+        final response = await moderationService.register(
           name: name,
           surname: surname,
           patronymic: patronymic,
-          birthdate: birthdate,
-          snils: snils,
+          birthdate: birthdate, // Передаем выбранную дату в формате yyyyMMdd
+          snils: formattedSnils,
           login: login,
           password: password,
         );
         if (response['success'] == true) {
-          final guid = response['data']['GUID'];
-          await moderationService.saveModerationGUID(guid); // Сохраняем GUID
+          final guid = response['guid'];
+          final status = response['status'];
+          await moderationService.saveModerationGUID(guid); // Сохраняем GUID модерации
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Заявка отправлена на модерацию. Ожидайте в течение 2 дней.')),
           );
@@ -196,8 +185,70 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     }
   }
 
+  String _formatDate(DateTime date, {String format = 'dd.MM.yyyy'}) {
+    return DateFormat(format).format(date);
+  }
+
+  String _capitalizeFirstLetter(String value) {
+    if (value.isEmpty) return value;
+    return value[0].toUpperCase() + value.substring(1).toLowerCase();
+  }
+
+  Future<void> _selectDate(BuildContext context) async {
+    await showModalBottomSheet(
+      context: context,
+      builder: (BuildContext buildContext) {
+        return Container(
+          color: Colors.white,
+          child: Column(
+            children: [
+              SizedBox(height: 20),
+              Text(
+                'Выберите дату рождения',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 20),
+              Expanded(
+                child: CupertinoDatePicker(
+                  mode: CupertinoDatePickerMode.date,
+                  initialDateTime: _selectedDate ?? DateTime.now(),
+                  minimumDate: DateTime(1900),
+                  maximumDate: DateTime.now(),
+                  onDateTimeChanged: (DateTime newDate) {
+                    setState(() {
+                      _selectedDate = newDate;
+                    });
+                  },
+                  use24hFormat: true, // Используем 24-часовой формат
+                ),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                },
+                child: Text('OK'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final TapGestureRecognizer userAgreementTapRecognizer = TapGestureRecognizer()
+      ..onTap = () async {
+        if (_userAgreementUrl.isNotEmpty) {
+          await launchUrl(Uri.parse(_userAgreementUrl), mode: LaunchMode.externalApplication);
+        }
+      };
+    final TapGestureRecognizer consentPDTapRecognizer = TapGestureRecognizer()
+      ..onTap = () async {
+        if (_consentPDUrl.isNotEmpty) {
+          await launchUrl(Uri.parse(_consentPDUrl), mode: LaunchMode.externalApplication);
+        }
+      };
     return Scaffold(
       appBar: AppBar(
         title: Text('Регистрация'),
@@ -210,6 +261,12 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              if (_errorMessage.isNotEmpty)
+                Text(
+                  _errorMessage,
+                  style: TextStyle(color: Colors.red),
+                ),
+              SizedBox(height: 10),
               Row(
                 children: [
                   Text('* ', style: TextStyle(color: Colors.red)), // Обязательное поле
@@ -218,6 +275,11 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                       controller: _nameController,
                       decoration: InputDecoration(labelText: 'Имя'),
                       validator: _validateName,
+                      keyboardType: TextInputType.name,
+                      onChanged: (value) {
+                        _nameController.text = _capitalizeFirstLetter(value);
+                        _nameController.selection = TextSelection.collapsed(offset: _nameController.text.length);
+                      },
                     ),
                   ),
                 ],
@@ -231,6 +293,11 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                       controller: _surnameController,
                       decoration: InputDecoration(labelText: 'Фамилия'),
                       validator: _validateName,
+                      keyboardType: TextInputType.name,
+                      onChanged: (value) {
+                        _surnameController.text = _capitalizeFirstLetter(value);
+                        _surnameController.selection = TextSelection.collapsed(offset: _surnameController.text.length);
+                      },
                     ),
                   ),
                 ],
@@ -243,7 +310,12 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                     child: TextFormField(
                       controller: _patronymicController,
                       decoration: InputDecoration(labelText: 'Отчество'),
-                      validator: _validateName,
+                      validator: _validatePatronymic, // Используем новый валидатор для отчества
+                      keyboardType: TextInputType.name,
+                      onChanged: (value) {
+                        _patronymicController.text = _capitalizeFirstLetter(value);
+                        _patronymicController.selection = TextSelection.collapsed(offset: _patronymicController.text.length);
+                      },
                     ),
                   ),
                 ],
@@ -253,11 +325,22 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                 children: [
                   Text('* ', style: TextStyle(color: Colors.red)), // Обязательное поле
                   Expanded(
-                    child: TextFormField(
-                      controller: _birthdateController,
-                      decoration: InputDecoration(labelText: 'Дата рождения (дд.мм.гггг)'),
-                      keyboardType: TextInputType.datetime,
-                      validator: _validateBirthdate,
+                    child: GestureDetector(
+                      onTap: () => _selectDate(context),
+                      child: AbsorbPointer(
+                        child: TextFormField(
+                          controller: TextEditingController(
+                            text: _selectedDate != null ? _formatDate(_selectedDate!) : '',
+                          ),
+                          decoration: InputDecoration(labelText: 'Дата рождения'),
+                          validator: (value) {
+                            if (_selectedDate == null) {
+                              return 'Обязательное поле';
+                            }
+                            return null;
+                          },
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -270,8 +353,17 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                     child: TextFormField(
                       controller: _snilsController,
                       decoration: InputDecoration(labelText: 'СНИЛС (XXX-XXX-XXX XX)'),
+                      onChanged: (value) {
+                        final formattedSnils = _formatSnils(value);
+                        if (formattedSnils != null) {
+                          _snilsController.value = TextEditingValue(
+                            text: formattedSnils,
+                            selection: TextSelection.collapsed(offset: formattedSnils.length),
+                          );
+                        }
+                      },
+                      // Убираем валидацию СНИЛСа
                       keyboardType: TextInputType.number,
-                      validator: _validateSnils,
                     ),
                   ),
                 ],
@@ -283,7 +375,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   Expanded(
                     child: TextFormField(
                       controller: _loginController,
-                      decoration: InputDecoration(labelText: 'Login/СНИЛС/Телефон'),
+                      decoration: InputDecoration(labelText: 'Login'),
                       validator: _validateLogin,
                     ),
                   ),
@@ -323,12 +415,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                           TextSpan(
                             text: 'условиями использования приложения',
                             style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline),
-                            recognizer: TapGestureRecognizer()
-                              ..onTap = () async {
-                                if (_userAgreementUrl.isNotEmpty) {
-                                  await launchUrl(Uri.parse(_userAgreementUrl), mode: LaunchMode.externalApplication);
-                                }
-                              },
+                            recognizer: userAgreementTapRecognizer,
                           ),
                         ],
                       ),
@@ -355,12 +442,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                           TextSpan(
                             text: 'обработку персональных данных',
                             style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline),
-                            recognizer: TapGestureRecognizer()
-                              ..onTap = () async {
-                                if (_consentPDUrl.isNotEmpty) {
-                                  await launchUrl(Uri.parse(_consentPDUrl), mode: LaunchMode.externalApplication);
-                                }
-                              },
+                            recognizer: consentPDTapRecognizer,
                           ),
                         ],
                       ),
@@ -390,7 +472,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     _nameController.dispose();
     _surnameController.dispose();
     _patronymicController.dispose();
-    _birthdateController.dispose();
     _snilsController.dispose();
     _loginController.dispose();
     _passwordController.dispose();

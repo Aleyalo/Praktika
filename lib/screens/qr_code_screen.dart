@@ -3,7 +3,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../services/auth_service.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-
+import 'login_screen.dart';
 class QrCodeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -13,7 +13,7 @@ class QrCodeScreen extends StatelessWidget {
         backgroundColor: Colors.yellow,
       ),
       body: FutureBuilder<Map<String, dynamic>>(
-        future: _getUserData(),
+        future: _getUserData(context), // Передаем контекст
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return Center(child: CircularProgressIndicator());
@@ -59,43 +59,47 @@ class QrCodeScreen extends StatelessWidget {
     );
   }
 
-  Future<Map<String, dynamic>> _getUserData() async {
+  Future<Map<String, dynamic>> _getUserData(BuildContext context) async {
     try {
       final authService = AuthService();
       final guid = await authService.getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID не найден');
+      final deviceId = await authService.getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID или deviceId не найдены');
       }
-
       final uri = Uri(
         scheme: 'https',
         host: 'mw.azs-topline.ru',
         port: 44445,
         path: '/hrm/hs/ewp/getQR',
       );
-
       final response = await http.get(
         uri,
         headers: {
           ...AuthService.baseHeaders,
           'ma-guid': guid,
+          'deviceId': deviceId, // Добавляем deviceId
         },
       ).timeout(Duration(seconds: 10));
-
+      print('Ответ сервера: ${response.body}');
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
-        print('Ответ сервера: $json');
-
         if (json['success'] == true && json['data'] != null) {
           final userData = json['data'];
-          print('Полученные данные пользователя из ответа сервера: $userData');
-
-          // Добавляем fullName для удобства отображения
           userData['fullName'] = '${userData['lastName'] ?? ''} ${userData['firstName'] ?? ''} ${userData['patronymic'] ?? ''}'.trim();
-
           return userData;
         } else {
-          throw Exception(json['error'] ?? 'Неизвестная ошибка');
+          if (json['error'] == 'Выход на других устройствах.') {
+            await authService.logout();
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (context) => LoginScreen()),
+                  (route) => false,
+            );
+            throw Exception('Вы вышли со всех устройств');
+          } else {
+            throw Exception(json['error'] ?? 'Неизвестная ошибка');
+          }
         }
       } else {
         throw Exception('HTTP-ошибка: ${response.statusCode}');

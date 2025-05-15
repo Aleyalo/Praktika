@@ -1,19 +1,19 @@
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
-import '../../utils/constants.dart';
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
 
 class AppsService {
-  static const String _baseUrl = 'mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
 
   Future<List<Map<String, dynamic>>> getApps() async {
     try {
       final guid = await AuthService().getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID не найден');
+      final deviceId = await AuthService().getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID или deviceId не найдены');
       }
-      // Корректное формирование URI с портом
       final uri = Uri(
         scheme: 'https',
         host: _baseUrl,
@@ -26,6 +26,7 @@ class AppsService {
         headers: {
           ...AppConstants.baseHeaders,
           'ma-guid': guid,
+          'deviceId': deviceId, // Добавляем deviceId
         },
       ).timeout(Duration(seconds: 10));
       print('Статус-код ответа: ${response.statusCode}');
@@ -36,7 +37,13 @@ class AppsService {
           final apps = List<Map<String, dynamic>>.from(json['data']['list']);
           return apps;
         } else {
-          throw Exception('Ошибка в структуре ответа: ${json['error']}');
+          if (json['error'] == 'Выход на других устройствах.') {
+            final authService = AuthService();
+            await authService.logout();
+            throw Exception('Вы вышли со всех устройств');
+          } else {
+            throw Exception('Ошибка в структуре ответа: ${json['error']}');
+          }
         }
       } else {
         throw Exception('HTTP-ошибка: ${response.statusCode}');

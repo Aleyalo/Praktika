@@ -1,17 +1,20 @@
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
-
+import '../screens/login_screen.dart'; // Добавлен импорт
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
+import 'package:flutter/material.dart';
 class ProfileService {
-  static const String _baseUrl = 'mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
 
-  Future<Map<String, dynamic>> getProfile() async {
+  Future<Map<String, dynamic>> getProfile(BuildContext context) async {
     try {
       final authService = AuthService();
       final guid = await authService.getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID не найден');
+      final deviceId = await authService.getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID или deviceId не найдены');
       }
       final uri = Uri(
         scheme: 'https',
@@ -22,15 +25,25 @@ class ProfileService {
       final response = await http.get(
         uri,
         headers: {
-          ...AuthService.baseHeaders,
+          ...AppConstants.baseHeaders,
           'ma-guid': guid,
+          'deviceId': deviceId, // Добавляем deviceId
         },
       ).timeout(Duration(seconds: 10));
+      print('Статус-код получения данных профиля: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
-        print('Ответ сервера: $json');
         if (json['success'] == true && json['data'] != null) {
           return json['data']; // Изменено: извлекаем данные из поля 'data'
+        } else if (json['error'] == 'Выход на других устройствах.') {
+          await authService.logout();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => LoginScreen()),
+                (route) => false,
+          );
+          throw Exception('Вы вышли со всех устройств');
         } else {
           throw Exception(json['error'] ?? 'Неизвестная ошибка');
         }

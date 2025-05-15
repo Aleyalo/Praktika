@@ -1,47 +1,102 @@
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\main.dart
 Content:
-// lib/main.dart
 import 'package:flutter/material.dart';
 import './screens/login_screen.dart'; // Импорт экрана входа
 import './screens/main_screen.dart'; // Импорт главного экрана
 import './services/auth_service.dart'; // Импорт AuthService
+import './services/moderation_service.dart'; // Импорт ModerationService
+import 'package:intl/intl.dart'; // Для форматирования даты
+import 'package:intl/date_symbol_data_local.dart'; // Для локализации даты
+import 'package:flutter_localizations/flutter_localizations.dart'; // Для локализации
 
 void main() {
   runApp(MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
+  @override
+  _MyAppState createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  bool _isBackgroundAuthAttempted = false;
+  bool _isLoggedIn = false;
+  bool _isModerationPending = false; // Добавляем состояние для модерации
+  String _moderationMessage = ''; // Добавляем сообщение о модерации
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsFlutterBinding.ensureInitialized(); // Убедимся, что Flutter binding инициализирован
+    initializeDateFormatting('ru_RU', null); // Инициализируем русскую локаль для дат
+    _checkModerationStatus(); // Добавляем вызов метода проверки модерации
+    _performBackgroundAuth();
+  }
+
+  Future<void> _checkModerationStatus() async {
+    final moderationService = ModerationService();
+    final moderationGuid = await AuthService.getModerationGUID();
+    if (moderationGuid != null) {
+      try {
+        final moderationStatus = await moderationService.checkModerationStatus(moderationGuid);
+        if (moderationStatus['success'] == true) {
+          final status = moderationStatus['status'];
+          if (status == 'На модерации') {
+            setState(() {
+              _isModerationPending = true; // Устанавливаем флаг модерации
+              _moderationMessage = 'Ваша заявка на регистрацию находится на модерации. Ожидайте около 3 дней.';
+            });
+          } else {
+            await AuthService.clearModerationGUID(); // Удаляем GUID модерации, если статус не "На модерации"
+          }
+        }
+      } catch (e) {
+        print('Ошибка при проверке статуса модерации: $e');
+      }
+    }
+  }
+
+  Future<void> _performBackgroundAuth() async {
+    final authService = AuthService();
+    final isLoggedIn = await authService.backgroundLogin();
+    setState(() {
+      _isLoggedIn = isLoggedIn;
+      _isBackgroundAuthAttempted = true;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: AuthService.navigatorKey, // Устанавливаем навигационный ключ
       debugShowCheckedModeBanner: false,
       title: 'Company App',
       theme: ThemeData(
         primarySwatch: Colors.green,
       ),
-      home: FutureBuilder<bool>(
-        future: _checkCredentials(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return Center(child: CircularProgressIndicator());
-          } else if (snapshot.hasData && snapshot.data == true) {
-            return MainScreen();
-          } else {
-            return LoginScreen();
+      supportedLocales: [Locale('ru', 'RU')], // Поддерживаемая локаль
+      localizationsDelegates: [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate, // Добавляем Cupertino локализацию
+      ],
+      localeResolutionCallback: (Locale? locale, Iterable<Locale> supportedLocales) {
+        for (var supportedLocale in supportedLocales) {
+          if (supportedLocale.languageCode == locale?.languageCode &&
+              supportedLocale.countryCode == locale?.countryCode) {
+            return supportedLocale;
           }
-        },
-      ),
+        }
+        return supportedLocales.first;
+      },
+      home: _isModerationPending
+          ? LoginScreen(isModerationPending: _isModerationPending, moderationMessage: _moderationMessage)
+          : _isBackgroundAuthAttempted
+          ? _isLoggedIn
+          ? MainScreen()
+          : LoginScreen()
+          : Center(child: CircularProgressIndicator()),
     );
-  }
-
-  // Метод для проверки наличия сохраненных учетных данных
-  Future<bool> _checkCredentials() async {
-    final authService = AuthService();
-    final guid = await authService.getGUID();
-    final email = await authService.getEmail();
-    final password = await authService.getPassword();
-    print('Проверка учетных данных: GUID=$guid, Email=$email, Password=$password');
-    return guid != null && guid.isNotEmpty && email != null && email.isNotEmpty && password != null && password.isNotEmpty;
   }
 }
 --------------------------------------------------
@@ -159,14 +214,12 @@ class Organization {
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\repositories\colleagues_repository.dart
 Content:
-// lib/repositories/colleagues_repository.dart
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../services/auth_service.dart';
-import '../utils/constants.dart';
 
 class ColleaguesRepository {
-  static const String _baseUrl = 'https://mw.azs-topline.ru';
+  static const String _baseUrl = 'https://mw.azs-topline.ru ';
   static const int _port = 44445;
 
   Future<List<Map<String, dynamic>>> fetchColleagues({
@@ -322,12 +375,13 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
     }
   }
 
-  Future<void> _loadDepartments(String organizationGuid) async {
+  Future<void> _loadDepartments(String organizationGuid, BuildContext context) async {
     try {
       print('Loading departments for organization GUID: $organizationGuid');
       final service = DepartmentsService();
       final departments = await service.getDepartments(
         organizationGuid: organizationGuid,
+        context: context, // Добавляем контекст
       );
       print('Departments loaded: $departments');
       if (departments.isEmpty) {
@@ -387,9 +441,9 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
       final favoritesService = FavoritesService();
       final isCurrentlySelected = colleague.selected;
       if (isCurrentlySelected) {
-        await favoritesService.removeFromFavorites(colleague.guid);
+        await favoritesService.removeFromFavorites(guidSelected: colleague.guid, context: context); // Передаем контекст
       } else {
-        await favoritesService.addToFavorites(colleague.guid);
+        await favoritesService.addToFavorites(guidSelected: colleague.guid, context: context); // Передаем контекст
       }
       setState(() {
         colleague.selected = !isCurrentlySelected;
@@ -405,11 +459,9 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
   void _updateColleaguesList(List<Colleague> colleagues) {
     var filteredColleagues = colleagues.where((colleague) =>
         colleague.name.toLowerCase().contains(_searchQuery)).toList();
-
     if (_showOnlyAuthorized) {
       filteredColleagues = filteredColleagues.where((colleague) => colleague.auth).toList();
     }
-
     print('Filtered colleagues after search: $filteredColleagues');
     filteredColleagues.sort((a, b) {
       if (a.selected && !b.selected) return -1;
@@ -428,7 +480,6 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
     print('_departments: $_departments');
     print('_selectedDepartmentGuid: $_selectedDepartmentGuid');
     print('_showOnlyAuthorized: $_showOnlyAuthorized');
-
     return Scaffold(
       appBar: AppBar(
         title: Text('Коллеги'),
@@ -444,7 +495,6 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                   String? newDepValue = _selectedDepartmentGuid;
                   List<Department> dialogDepartments = _departments;
                   bool showOnlyAuthorized = _showOnlyAuthorized;
-
                   return StatefulBuilder(
                     builder: (context, setState) {
                       return AlertDialog(
@@ -460,7 +510,7 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                                   final orgName = org['organization_name'] as String;
                                   return DropdownMenuItem<String>(
                                     value: orgGuid,
-                                    child: Text(orgName),
+                                    child: _buildTruncatedText(orgName),
                                   );
                                 }).toList(),
                                 onChanged: (String? value) async {
@@ -472,14 +522,11 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                                     });
                                     return;
                                   }
-                                  final service = DepartmentsService();
-                                  final departments = await service.getDepartments(
-                                    organizationGuid: value,
-                                  );
+                                  await _loadDepartments(value, context); // Передаем контекст
                                   setState(() {
                                     newOrgValue = value;
                                     newDepValue = null;
-                                    dialogDepartments = departments;
+                                    dialogDepartments = _departments;
                                   });
                                 },
                                 decoration: InputDecoration(
@@ -494,7 +541,7 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                                     print('Adding department to dropdown: ${dep.guid} - ${dep.name}');
                                     return DropdownMenuItem<String>(
                                       value: dep.guid,
-                                      child: Text(dep.name),
+                                      child: _buildTruncatedText(dep.name),
                                     );
                                   }).toList(),
                                   onChanged: (String? value) {
@@ -578,11 +625,9 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
               builder: (context, colleagues, child) {
                 var filteredColleagues = colleagues.where((colleague) =>
                     colleague.name.toLowerCase().contains(_searchQuery)).toList();
-
                 if (_showOnlyAuthorized) {
                   filteredColleagues = filteredColleagues.where((colleague) => colleague.auth).toList();
                 }
-
                 print('Filtered colleagues in builder: $filteredColleagues');
                 filteredColleagues.sort((a, b) {
                   if (a.selected && !b.selected) return -1;
@@ -590,7 +635,6 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
                   return a.name.compareTo(b.name);
                 });
                 print('Sorted colleagues in builder: $filteredColleagues');
-
                 return filteredColleagues.isEmpty
                     ? Center(child: Text('Коллег нет'))
                     : ListView.builder(
@@ -636,6 +680,19 @@ class _ColleaguesScreenState extends State<ColleaguesScreen> {
       ),
     );
   }
+
+  Widget _buildTruncatedText(String text) {
+    return Container(
+      constraints: BoxConstraints(maxWidth: 250), // Ограничиваем максимальную ширину
+      child: Text(
+        text,
+        overflow: TextOverflow.ellipsis,
+        maxLines: 1,
+        softWrap: false,
+        style: TextStyle(fontSize: 16),
+      ),
+    );
+  }
 }
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\colleague_card_screen.dart
@@ -657,7 +714,7 @@ class ColleagueCardScreen extends StatelessWidget {
         backgroundColor: Colors.yellow,
       ),
       body: FutureBuilder<Map<String, dynamic>>(
-        future: _fetchColleagueData(),
+        future: _fetchColleagueData(context), // Передаем контекст
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return Center(child: CircularProgressIndicator());
@@ -735,10 +792,10 @@ class ColleagueCardScreen extends StatelessWidget {
     );
   }
 
-  Future<Map<String, dynamic>> _fetchColleagueData() async {
+  Future<Map<String, dynamic>> _fetchColleagueData(BuildContext context) async {
     try {
       final service = ColleagueCardService();
-      return await service.getColleagueCard(guidCollegue: colleagueGuid);
+      return await service.getColleagueCard(guidCollegue: colleagueGuid, context: context); // Передаем контекст
     } catch (e) {
       print('Ошибка при загрузке данных коллеги: $e');
       return {};
@@ -749,7 +806,6 @@ class ColleagueCardScreen extends StatelessWidget {
 class ProfileField extends StatelessWidget {
   final String label;
   final String value;
-
   const ProfileField({Key? key, required this.label, required this.value}) : super(key: key);
 
   @override
@@ -760,7 +816,10 @@ class ProfileField extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.start,
         children: [
           Expanded(
-            child: Text('$label:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            child: Text(
+              '$label:',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
           ),
           Text(value, style: TextStyle(fontSize: 16)),
         ],
@@ -772,7 +831,6 @@ class ProfileField extends StatelessWidget {
 class LinkItem extends StatelessWidget {
   final String label;
   final String url;
-
   const LinkItem({Key? key, required this.label, required this.url}) : super(key: key);
 
   @override
@@ -783,7 +841,10 @@ class LinkItem extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.start,
         children: [
           Expanded(
-            child: Text('$label:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            child: Text(
+              '$label:',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
           ),
           GestureDetector(
             onTap: () => _launchUrl(context, label, url),
@@ -804,21 +865,18 @@ class LinkItem extends StatelessWidget {
       );
       return;
     }
-
     Uri? uri;
-
-    if (label.toLowerCase() == 'vk' && !url.startsWith('http')) {
-      uri = Uri.parse('https://vk.com/$url');
+    if (label.toLowerCase() == 'vk' && !url.startsWith('https://vk.com/ ')) {
+      uri = Uri.parse('https://vk.com/ ${url.replaceAll('@', '')}'); // Убираем '@' если есть
     } else if (label.toLowerCase() == 'telegram' && !url.startsWith('tg://')) {
-      uri = Uri.parse('tg://resolve?domain=$url');
-    } else if (label.toLowerCase() == 'whatsapp' && !url.startsWith('https')) {
-      uri = Uri.parse('https://wa.me/$url');
+      uri = Uri.parse('tg://resolve?domain=${url.replaceAll('@', '')}'); // Убираем '@' если есть
+    } else if (label.toLowerCase() == 'whatsapp' && !url.startsWith('https://')) {
+      uri = Uri.parse('https://wa.me/ ${url.replaceAll('+', '')}'); // Убираем '+' если есть
     } else if (url.startsWith('www.') || url.contains('.com') || url.contains('.ru')) {
       uri = Uri.parse('https://$url');
     } else {
       uri = Uri.tryParse(url);
     }
-
     if (uri != null && await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } else {
@@ -836,7 +894,6 @@ class LinkItem extends StatelessWidget {
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\confirm_phone_screen.dart
 Content:
-// lib/screens/confirm_phone_screen.dart
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../screens/main_screen.dart';
@@ -845,11 +902,15 @@ class ConfirmPhoneScreen extends StatefulWidget {
   final String newPhone;
   final String? guid; // Добавляем параметр guid
   final String? deviceId; // Добавляем параметр deviceId
+  final bool isRecovery; // Добавляем параметр isRecovery для восстановления доступа
+  final Function(String code)? onConfirm; // Добавляем функцию для подтверждения номера телефона
   const ConfirmPhoneScreen({
     Key? key,
     required this.newPhone,
     required this.guid, // Делаем обязательным
     required this.deviceId, // Делаем обязательным
+    this.isRecovery = false, // По умолчанию false
+    this.onConfirm, // Добавляем функцию для подтверждения номера телефона
   }) : super(key: key);
 
   @override
@@ -867,34 +928,36 @@ class _ConfirmPhoneScreenState extends State<ConfirmPhoneScreen> {
       _errorMessage = '';
     });
     try {
-      final authService = AuthService();
-      final email = await authService.getEmail();
-      final password = await authService.getPassword();
-      if (email == null || email.isEmpty || password == null || password.isEmpty) {
-        throw Exception('Email или пароль не найдены');
-      }
-      final result = await authService.confirmDevice(
-        code: _codeController.text,
-        login: email,
-        password: password,
-        deviceId: widget.deviceId!, // Используем переданный deviceId
-        context: context,
-      );
-      if (result) {
-        Navigator.pop(context, true);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Номер телефона успешно подтверждён')),
-        );
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => MainScreen()),
-        );
+      if (widget.onConfirm != null) {
+        await widget.onConfirm!(_codeController.text);
       } else {
-        setState(() {
-          _errorMessage = 'Код подтверждения неверен';
-        });
+        final authService = AuthService();
+        final result = await authService.confirmDevice(
+          code: _codeController.text,
+          login: '', // Логин не нужен для подтверждения номера
+          password: '', // Пароль не нужен для подтверждения номера
+          deviceId: widget.deviceId!,
+          context: context,
+        );
+        if (result) {
+          print('Код подтверждения успешно подтвержден');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Номер телефона успешно подтвержден')),
+          );
+          Navigator.pop(context, true);
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => MainScreen()),
+          );
+        } else {
+          print('Код подтверждения неверен');
+          setState(() {
+            _errorMessage = 'Код подтверждения неверен';
+          });
+        }
       }
     } catch (e) {
+      print('Произошла ошибка при подтверждении кода: $e');
       setState(() {
         _errorMessage = 'Произошла ошибка: $e';
       });
@@ -977,15 +1040,14 @@ class DocumentsScreen extends StatelessWidget {
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\edit_profile_screen.dart
 Content:
-// lib/screens/edit_profile_screen.dart
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:convert';
 import 'dart:io';
 import '../services/profile_edit_service.dart';
-import '../services/phone_edit_service.dart';
+import '../services/phone_edit_service.dart'; // Добавлен импорт PhoneEditService
 import '../services/auth_service.dart';
-import '../../utils/constants.dart';
+import '../services/profile_service.dart' as ProfileServiceAlias; // Переименовываем импорт для избежания конфликта
 import 'confirm_phone_screen.dart';
 import 'package:flutter/services.dart';
 
@@ -996,6 +1058,7 @@ class EditProfileScreen extends StatefulWidget {
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _phoneFormKey = GlobalKey<FormState>(); // Добавляем ключ для формы номера телефона
   final _emailController = TextEditingController();
   final _vkController = TextEditingController();
   final _telegramController = TextEditingController();
@@ -1007,24 +1070,32 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   static const int _maxImageSizeInBytes = 2 * 1024 * 1024;
   String? _deviceId;
   String? _guid;
+  String? _newPhone; // Добавляем переменную для хранения нового номера телефона
+  int _phoneStep = 1; // Добавляем состояние для хранения текущего шага
+  late Map<String, dynamic> _initialProfileData; // Добавляем переменную для хранения исходных данных профиля
 
   @override
   void initState() {
     super.initState();
-    _loadInitialData();
+    _loadProfileData();
     _loadDeviceIdAndGuid();
   }
 
-  Future<void> _loadInitialData() async {
+  Future<void> _loadProfileData() async {
     try {
-      final userData = await AuthService().getUserData();
+      final profileService = ProfileServiceAlias.ProfileService(); // Используем переименованный импорт
+      final profileData = await profileService.getProfile(context); // Передаем контекст
       setState(() {
-        _emailController.text = userData['email'] ?? '';
-        _vkController.text = userData['links']?['VK'] ?? '';
-        _telegramController.text = userData['links']?['Telegram'] ?? '';
-        _whatsappController.text = userData['links']?['WhatsApp'] ?? '';
-        _phoneController.text = userData['phone'] ?? '';
-        _initialPhone = userData['phone'] ?? '';
+        _emailController.text = profileData['email'] ?? '';
+        _vkController.text = profileData['links']?['VK'] ?? '';
+        _telegramController.text = profileData['links']?['Telegram'] ?? '';
+        _whatsappController.text = profileData['links']?['WhatsApp'] ?? '';
+        _phoneController.text = profileData['phone'] ?? '';
+        _initialPhone = profileData['phone'] ?? '';
+        if (profileData['photo'] != null && profileData['photo'].isNotEmpty) {
+          _photoBase64 = profileData['photo'];
+        }
+        _initialProfileData = profileData; // Сохраняем исходные данные профиля
       });
     } catch (e) {
       print('Ошибка при загрузке данных пользователя: $e');
@@ -1064,6 +1135,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   Future<void> _saveProfile() async {
     if (_formKey.currentState?.validate() ?? false) {
+      // Проверяем, были ли изменения в данных
+      if (!_hasProfileChanged()) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Данные не изменились')),
+        );
+        return;
+      }
+
       bool confirmed = await _showConfirmDialog(context);
       if (confirmed) {
         try {
@@ -1075,6 +1154,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               if (_whatsappController.text.isNotEmpty) 'WhatsApp': _whatsappController.text,
             },
             photoBase64: _photoBase64,
+            context: context, // Передаем контекст
           );
           if (result['success'] == true) {
             ScaffoldMessenger.of(context)
@@ -1097,6 +1177,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         }
       }
     }
+  }
+
+  bool _hasProfileChanged() {
+    return _emailController.text != _initialProfileData['email'] ||
+        _vkController.text != (_initialProfileData['links']?['VK'] ?? '') ||
+        _telegramController.text != (_initialProfileData['links']?['Telegram'] ?? '') ||
+        _whatsappController.text != (_initialProfileData['links']?['WhatsApp'] ?? '') ||
+        _photoBase64 != _initialProfileData['photo'];
   }
 
   Future<bool> _showConfirmDialog(BuildContext context) async {
@@ -1157,79 +1245,160 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 
   String? _validatePhone(String? value) {
-    if (value == null || value.isEmpty) return null;
-    final phoneRegex = RegExp(r'^[0-9]+$');
+    if (value == null || value.isEmpty) return null; // Убираем обязательное поле
+    final phoneRegex = RegExp(r'^[0-9]{10,11}$');
     if (!phoneRegex.hasMatch(value)) {
-      return 'Введите корректный номер телефона (только цифры)';
+      return 'Введите корректный номер телефона';
     }
     return null;
   }
 
+  String _formatPhoneNumber(String phone) {
+    // Удаляем все символы, кроме цифр
+    String cleaned = phone.replaceAll(RegExp(r'\D'), '');
+    // Если номер начинается с 8, заменяем на 7
+    if (cleaned.startsWith('8')) {
+      cleaned = '7' + cleaned.substring(1);
+    }
+    // Если номер состоит из 10 цифр, добавляем +7 в начало
+    if (cleaned.length == 10) {
+      cleaned = '+7$cleaned';
+    } else if (cleaned.length == 11) {
+      cleaned = '+$cleaned';
+    }
+    // Форматируем номер в формат +7 (XXX) XXX-XX-XX
+    if (cleaned.length == 12) {
+      cleaned = cleaned.replaceFirstMapped(RegExp(r'^(\+\d{1})(\d{3})(\d{3})(\d{2})(\d{2})$'), (match) {
+        return '${match[1]} (${match[2]}) ${match[3]}-${match[4]}-${match[5]}';
+      });
+    }
+    return cleaned;
+  }
+
   Future<void> _changePhoneNumber() async {
-    final currentPhone = _phoneController.text.trim();
-    if (currentPhone.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Введите новый номер телефона')),
-      );
-      return;
-    }
-    if (currentPhone == _initialPhone) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Новый номер не отличается от текущего.')),
-      );
-      return;
-    }
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text('Подтвердите действие'),
-          content: Text('Вы действительно хотите изменить номер телефона?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text('Отмена'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text('Да'),
-            ),
-          ],
+    if (_phoneFormKey.currentState?.validate() ?? false) {
+      final currentPhone = _phoneController.text.trim();
+      if (currentPhone.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Введите новый номер телефона')),
         );
-      },
-    ) ?? false;
-    if (!confirmed) return;
-    try {
-      final result = await PhoneEditService.editPhoneNumber(
-        newPhone: currentPhone,
-        step: 1,
+        return;
+      }
+      // Форматируем номер телефона
+      final formattedPhone = _formatPhoneNumber(currentPhone);
+      if (formattedPhone == _initialPhone) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Новый номер не отличается от текущего.')),
+        );
+        return;
+      }
+      // Показываем диалог подтверждения
+      bool confirmed = await _showPhoneChangeConfirmationDialog();
+      if (confirmed) {
+        // Шаг 1: Отправляем новый номер телефона
+        if (_phoneStep == 1) {
+          try {
+            final step1Result = await PhoneEditService.editPhoneNumber(
+              newPhone: formattedPhone,
+              step: 1,
+              context: context, // Передаем контекст
+            );
+            if (step1Result['success'] == true) {
+              print('Номер телефона успешно отправлен, перенаправляем на ConfirmPhoneScreen');
+              setState(() {
+                _newPhone = formattedPhone; // Сохраняем новый номер телефона
+              });
+              if (mounted) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ConfirmPhoneScreen(
+                      newPhone: formattedPhone,
+                      guid: _guid ?? '', // Используем значение по умолчанию, если guid null
+                      deviceId: _deviceId ?? '', // Добавляем deviceId
+                      onConfirm: _confirmPhoneNumber, // Добавляем функцию подтверждения
+                    ),
+                  ),
+                );
+              }
+            } else {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Ошибка: ${step1Result['error']}')),
+                );
+              }
+            }
+          } catch (e) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Произошла ошибка: $e')),
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
+  Future<bool> _showPhoneChangeConfirmationDialog() async {
+    return await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Подтверждение смены номера телефона'),
+        content: Text('Вы действительно хотите изменить номер телефона на ${_phoneController.text}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text('Нет'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop(true);
+            },
+            child: Text('Да'),
+          ),
+        ],
+      ),
+    ) ??
+        false;
+  }
+
+  Future<void> _confirmPhoneNumber(String code) async {
+    if (_newPhone == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Новый номер телефона не задан')),
       );
-      if (result['success'] == true) {
-        if (mounted) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => ConfirmPhoneScreen(
-                newPhone: currentPhone,
-                guid: _guid ?? '', // Используем значение по умолчанию, если guid null
-                deviceId: _deviceId ?? '', // Добавляем deviceId
-              ),
-            ),
-          );
-        }
+      return;
+    }
+    // Шаг 2: Подтверждаем код
+    try {
+      final step2Result = await PhoneEditService.editPhoneNumber(
+        newPhone: _newPhone!,
+        step: 2,
+        context: context, // Передаем контекст
+      );
+      if (step2Result['success'] == true) {
+        print('Номер телефона успешно подтвержден');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Номер телефона успешно подтвержден')),
+        );
+        setState(() {
+          _phoneController.text = _newPhone!;
+          _initialPhone = _newPhone!;
+          _newPhone = null; // Сбрасываем новый номер после успешного подтверждения
+          _phoneStep = 1; // Сбрасываем шаг после успешного подтверждения
+        });
+        // Возвращаемся на страницу редактирования профиля
+        Navigator.pop(context);
       } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Ошибка: ${result['error']}')),
-          );
-        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Ошибка: ${step2Result['error']}')),
+        );
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Произошла ошибка: $e')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Произошла ошибка: $e')),
+      );
     }
   }
 
@@ -1295,18 +1464,28 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 label: Text('Сохранить'),
               ),
               SizedBox(height: 16),
-              TextFormField(
-                controller: _phoneController,
-                decoration: InputDecoration(labelText: 'Номер телефона'),
-                keyboardType: TextInputType.phone,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                validator: _validatePhone,
-              ),
-              SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: _changePhoneNumber,
-                icon: Icon(Icons.phone),
-                label: Text('Изменить номер телефона'),
+              Form(
+                key: _phoneFormKey, // Используем отдельный ключ для формы номера телефона
+                child: Column(
+                  children: [
+                    TextFormField(
+                      controller: _phoneController,
+                      decoration: InputDecoration(labelText: 'Номер телефона'),
+                      keyboardType: TextInputType.phone,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly,
+                        LengthLimitingTextInputFormatter(11), // Ограничиваем до 11 цифр
+                      ],
+                      validator: _validatePhone,
+                    ),
+                    SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      onPressed: _changePhoneNumber,
+                      icon: Icon(Icons.phone),
+                      label: Text('Изменить номер телефона'),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -1329,77 +1508,203 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\forgot_password_screen.dart
 Content:
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http; // Импортируем библиотеку для HTTP-запросов
+import 'dart:convert'; // Импортируем библиотеку для работы с JSON и Base64
+import 'package:flutter/services.dart'; // Импортируем библиотеку для FilteringTextInputFormatter
+import '../services/auth_service.dart'; // Импортируем AuthService
+import './confirm_phone_screen.dart'; // Импортируем ConfirmPhoneScreen
+import '../models/device_info.dart'; // Импортируем DeviceInfo
+import '../services/device_info_service.dart'; // Импортируем DeviceInfoService
 
-class ForgotPasswordPage extends StatefulWidget {
-  const ForgotPasswordPage({super.key});
-
+class ForgotPasswordScreen extends StatefulWidget {
   @override
-  State<ForgotPasswordPage> createState() => _ForgotPasswordPageState();
+  _ForgotPasswordScreenState createState() => _ForgotPasswordScreenState();
 }
 
-class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
-  final _emailController = TextEditingController();
+class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
+  final _phoneController = TextEditingController();
+  String _errorMessage = '';
 
-  void _sendResetEmail() {
-    final email = _emailController.text;
-    if (email.isNotEmpty && email.contains('@')) {
-      // Пока просто SnackBar, здесь потом можно подключить Firebase или API
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Код отправлен SMS')),
-      );
+  String? _validatePhone(String? value) {
+    if (value == null || value.isEmpty) {
+      return 'Обязательное поле';
+    }
+    final formattedPhone = _formatPhoneNumber(value);
+    if (formattedPhone == null) {
+      return 'Неверный формат номера телефона';
+    }
+    return null;
+  }
+
+  String? _formatPhoneNumber(String phone) {
+    // Удаляем все символы, кроме цифр
+    String cleaned = phone.replaceAll(RegExp(r'\D'), '');
+    // Если номер начинается с 7 или 8, удаляем первую цифру и добавляем +7
+    if (cleaned.startsWith('7') || cleaned.startsWith('8')) {
+      cleaned = '+7' + cleaned.substring(1);
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Введите корректный номер телефона')),
+      cleaned = '+$cleaned';
+    }
+    // Форматируем номер в формат +7 (XXX) XXX-XX-XX
+    if (cleaned.length == 12) {
+      cleaned = cleaned.replaceFirstMapped(RegExp(r'^(\+\d{1})(\d{3})(\d{3})(\d{2})(\d{2})$'), (match) {
+        return '${match[1]} (${match[2]}) ${match[3]}-${match[4]}-${match[5]}';
+      });
+      return cleaned;
+    }
+    return null;
+  }
+
+  Future<void> _requestRecovery(BuildContext context) async {
+    final phone = _phoneController.text.trim();
+    final formattedPhone = _formatPhoneNumber(phone);
+    if (formattedPhone == null) {
+      setState(() {
+        _errorMessage = 'Неверный формат номера телефона';
+      });
+      return;
+    }
+
+    try {
+      // Получаем актуальную информацию об устройстве
+      final deviceInfo = await DeviceInfoService.getDeviceInfo(context);
+      final bodyMap = {
+        "deviceInfo": deviceInfo.toJson(),
+        "login": "", // Пустая строка для логина
+        "password": "", // Пустая строка для пароля
+        "recovery": true,
+        "phone": formattedPhone,
+      };
+
+      final body = base64Encode(utf8.encode(jsonEncode(bodyMap)));
+      final uri = Uri(
+        scheme: 'https',
+        host: 'mw.azs-topline.ru',
+        port: 44445,
+        path: '/hrm/hs/ewp/authorization',
       );
+
+      print('Запрос к URI: $uri');
+      print('Тело запроса (JSON): ${jsonEncode(bodyMap)}'); // Добавляем лог JSON
+      print('Тело запроса (Base64): $body');
+
+      final response = await http.post(
+        uri,
+        headers: {
+          ...AuthService.baseHeaders, // Используем основные заголовки
+        },
+        body: body,
+      ).timeout(Duration(seconds: 10));
+
+      print('Статус-код: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true && json['data'] != null) {
+          final data = json['data'];
+          final guid = data['person']['guid'] as String?;
+          final deviceId = deviceInfo.deviceId as String?;
+          if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+            throw Exception('GUID или deviceId отсутствуют в ответе');
+          }
+          // Сохраняем GUID и deviceId
+          await AuthService.saveCredentials('', '', guid, deviceId);
+
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ConfirmPhoneScreen(
+                newPhone: formattedPhone,
+                guid: guid,
+                deviceId: deviceId,
+                isRecovery: true, // Устанавливаем флаг восстановления доступа
+              ),
+            ),
+          );
+        } else {
+          setState(() {
+            _errorMessage = json['error'] ?? 'Неизвестная ошибка';
+          });
+        }
+      } else {
+        setState(() {
+          _errorMessage = 'HTTP-ошибка: ${response.statusCode}';
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Ошибка при восстановлении доступа: $e';
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Забыли пароль')),
+      appBar: AppBar(
+        title: Text('Восстановление доступа'),
+        backgroundColor: Colors.yellow,
+      ),
       body: Padding(
-        padding: const EdgeInsets.all(16.0),
+        padding: EdgeInsets.all(16),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Text(
+            Text(
               'Введите ваш номер телефона для восстановления доступа:',
               style: TextStyle(fontSize: 18),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _emailController,
-              decoration: const InputDecoration(
-                labelText: 'Номер',
-                border: OutlineInputBorder(),
+            SizedBox(height: 16),
+            TextFormField(
+              controller: _phoneController,
+              decoration: InputDecoration(
+                labelText: 'Номер телефона',
+                errorText: _errorMessage.isNotEmpty ? _errorMessage : null,
               ),
-              keyboardType: TextInputType.emailAddress,
+              keyboardType: TextInputType.phone,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             ),
-            const SizedBox(height: 24),
+            SizedBox(height: 24),
             ElevatedButton(
-              onPressed: _sendResetEmail,
-              child: const Text('Отправить SMS'),
+              onPressed: () => _requestRecovery(context),
+              child: Text('Отправить код'),
             ),
           ],
         ),
       ),
     );
   }
+
+  @override
+  void dispose() {
+    _phoneController.dispose();
+    super.dispose();
+  }
 }
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\login_screen.dart
 Content:
-// lib/screens/login_screen.dart
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../screens/main_screen.dart';
 import '../screens/registration_screen.dart';
 import 'forgot_password_screen.dart';
 import 'confirm_phone_screen.dart';
+import 'package:intl/intl.dart'; // Для форматирования даты
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import '../services/moderation_service.dart'; // Импортируем ModerationService
 
 class LoginScreen extends StatefulWidget {
+  final bool isModerationPending; // Добавляем параметр для модерации
+  final String moderationMessage; // Добавляем параметр для сообщения о модерации
+  const LoginScreen({
+    Key? key,
+    this.isModerationPending = false, // По умолчанию false
+    this.moderationMessage = '', // По умолчанию пустая строка
+  }) : super(key: key);
   @override
   _LoginScreenState createState() => _LoginScreenState();
 }
@@ -1410,19 +1715,67 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   String _errorMessage = '';
 
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.isModerationPending) {
+      _checkModerationStatus();
+    }
+  }
+
+  Future<void> _checkModerationStatus() async {
+    final moderationService = ModerationService();
+    final moderationGuid = await AuthService.getModerationGUID();
+    if (moderationGuid != null) {
+      try {
+        final moderationStatus = await moderationService.checkModerationStatus(moderationGuid);
+        if (moderationStatus['success'] == true) {
+          final status = moderationStatus['status'];
+          if (status == 'На модерации') {
+            setState(() {
+              _errorMessage = 'Ваша заявка на регистрацию находится на модерации. Ожидайте около 3 дней.';
+            });
+          } else {
+            await AuthService.clearModerationGUID(); // Удаляем GUID модерации, если статус не "На модерации"
+          }
+        }
+      } catch (e) {
+        print('Ошибка при проверке статуса модерации: $e');
+      }
+    }
+  }
+
   Future<void> _loginUser(BuildContext context) async {
     setState(() {
       _isLoading = true;
       _errorMessage = '';
     });
     try {
-      String email = _emailController.text.trim();
+      final moderationService = ModerationService();
+      final moderationGuid = await AuthService.getModerationGUID();
+      if (moderationGuid != null) {
+        try {
+          final moderationStatus = await moderationService.checkModerationStatus(moderationGuid);
+          if (moderationStatus['success'] == true) {
+            final status = moderationStatus['status'];
+            if (status == 'На модерации') {
+              setState(() {
+                _errorMessage = 'Дождитесь завершения предыдущей модерации';
+              });
+              return;
+            }
+          }
+        } catch (e) {
+          print('Ошибка при проверке статуса модерации: $e');
+        }
+      }
+      String login = _emailController.text.trim();
       String password = _passwordController.text.trim();
-      if (email.isEmpty || password.isEmpty) {
+      if (login.isEmpty || password.isEmpty) {
         throw Exception('Пожалуйста, заполните все поля');
       }
       final authService = AuthService();
-      final result = await authService.newLogin(email, password, context);
+      final result = await authService.newLogin(login, password, context);
       if (result['success'] == true) {
         final guid = result['guid'];
         final deviceId = result['deviceId'];
@@ -1432,7 +1785,7 @@ class _LoginScreenState extends State<LoginScreen> {
             context,
             MaterialPageRoute(
               builder: (context) => ConfirmPhoneScreen(
-                newPhone: email,
+                newPhone: login,
                 guid: guid,
                 deviceId: deviceId, // Передаем deviceId
               ),
@@ -1447,11 +1800,25 @@ class _LoginScreenState extends State<LoginScreen> {
           );
         }
       } else {
-        throw Exception(result['error'] ?? 'Неверный логин или пароль');
+        // Обрабатываем ошибку авторизации
+        final error = result['error']?.trim();
+        if (error == 'Неверный логин или пароль') {
+          setState(() {
+            _errorMessage = 'Неверный логин или пароль';
+          });
+        } else {
+          setState(() {
+            _errorMessage = error ?? 'Произошла ошибка при авторизации';
+          });
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_errorMessage)),
+        );
       }
     } catch (e) {
+      // Обрабатываем другие ошибки
       setState(() {
-        _errorMessage = e.toString();
+        _errorMessage = 'Неверный логин или пароль';
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(_errorMessage)),
@@ -1461,6 +1828,15 @@ class _LoginScreenState extends State<LoginScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  String _formatDate(DateTime date, {String format = 'dd.MM.yyyy'}) {
+    return DateFormat(format).format(date);
+  }
+
+  String _capitalizeFirstLetter(String value) {
+    if (value.isEmpty) return value;
+    return value[0].toUpperCase() + value.substring(1).toLowerCase();
   }
 
   @override
@@ -1476,55 +1852,78 @@ class _LoginScreenState extends State<LoginScreen> {
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
             SizedBox(height: 20),
-            TextField(
-              controller: _emailController,
-              decoration: InputDecoration(
-                labelText: 'Login/СНИЛС/Телефон',
-                errorText: _errorMessage.isNotEmpty ? _errorMessage : null,
-              ),
-            ),
-            SizedBox(height: 10),
-            TextField(
-              controller: _passwordController,
-              decoration: InputDecoration(
-                labelText: 'Пароль',
-                errorText: _errorMessage.isNotEmpty ? _errorMessage : null,
-              ),
-              obscureText: true,
-            ),
-            SizedBox(height: 20),
-            if (_isLoading)
-              CircularProgressIndicator()
+            if (widget.isModerationPending)
+              Text(
+                widget.moderationMessage,
+                style: TextStyle(color: Colors.red),
+              )
             else
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                onPressed: () => _loginUser(context),
-                child: Text('Войти'),
+              Column(
+                children: [
+                  Row(
+                    children: [
+                      Text('* ', style: TextStyle(color: Colors.red)), // Обязательное поле
+                      Expanded(
+                        child: TextFormField(
+                          controller: _emailController,
+                          decoration: InputDecoration(labelText: 'Login/СНИЛС/Телефон'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Text('* ', style: TextStyle(color: Colors.red)), // Обязательное поле
+                      Expanded(
+                        child: TextFormField(
+                          controller: _passwordController,
+                          decoration: InputDecoration(labelText: 'Пароль'),
+                          obscureText: true,
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 20),
+                  if (_isLoading)
+                    CircularProgressIndicator()
+                  else
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                      onPressed: widget.isModerationPending ? null : () => _loginUser(context),
+                      child: Text('Войти'),
+                    ),
+                  if (_errorMessage.isNotEmpty && !widget.isModerationPending)
+                    Text(
+                      _errorMessage,
+                      style: TextStyle(color: Colors.red),
+                    ),
+                  TextButton(
+                    onPressed: widget.isModerationPending ? null : () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => RegistrationScreen()),
+                      );
+                    },
+                    child: Text('Зарегистрироваться'),
+                  ),
+                  TextButton(
+                    onPressed: widget.isModerationPending ? null : () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => ForgotPasswordScreen()),
+                      );
+                    },
+                    child: Text(
+                      'Забыли пароль?',
+                      style: TextStyle(
+                        color: Colors.blue,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            TextButton(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => RegistrationScreen()),
-                );
-              },
-              child: Text('Зарегистрироваться'),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => ForgotPasswordPage()),
-                );
-              },
-              child: Text(
-                'Забыли пароль?',
-                style: TextStyle(
-                  color: Colors.blue,
-                  decoration: TextDecoration.underline,
-                ),
-              ),
-            )
           ],
         ),
       ),
@@ -1738,8 +2137,8 @@ class NewsDetailScreen extends StatelessWidget {
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\news_screen.dart
 Content:
 import 'package:flutter/material.dart';
-import '../services//news_service.dart';
-import 'news_detail_screen.dart';
+import '../services/news_service.dart';
+import './news_detail_screen.dart';
 
 class NewsScreen extends StatefulWidget {
   @override
@@ -1761,7 +2160,11 @@ class _NewsScreenState extends State<NewsScreen> {
   Future<List<Map<String, dynamic>>> _fetchNewsData() async {
     try {
       final newsService = NewsService();
-      final newsList = await newsService.getNews(limit: 50, offset: 0);
+      final newsList = await newsService.getNews(
+        limit: 50,
+        offset: 0,
+        context: context, // Передаем контекст
+      );
       if (newsList is! List) {
         throw Exception('Некорректный формат данных: новости не являются списком');
       }
@@ -1886,6 +2289,7 @@ import 'package:flutter/material.dart';
 import '../services/privacy_service.dart';
 import '../utils/error_handler.dart';
 import 'package:collection/collection.dart';
+
 class PrivacySettingsScreen extends StatefulWidget {
   @override
   _PrivacySettingsScreenState createState() => _PrivacySettingsScreenState();
@@ -1921,16 +2325,17 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
   Future<void> _saveSettings() async {
     // Сравниваем значения вручную
     bool settingsEqual = MapEquality().equals(_currentSettings, _editedSettings);
-
     if (settingsEqual) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Настройки не изменились')),
       );
       return;
     }
-
     try {
-      final success = await PrivacyService().updatePrivacySettings(_editedSettings);
+      final success = await PrivacyService().updatePrivacySettings(
+        settings: _editedSettings,
+        context: context, // Передаем контекст
+      );
       if (success) {
         setState(() {
           _currentSettings = Map.from(_editedSettings);
@@ -1967,7 +2372,6 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
                   _buildSettingTile("Скрыть номер телефона", "number"),
                   _buildSettingTile("Скрыть почту", "mail"),
                   _buildSettingTile("Скрыть ссылки", "links"),
-
                   // Кнопка "Сохранить" — справа, на уровне других пунктов
                   Align(
                     alignment: Alignment.centerRight,
@@ -2003,7 +2407,6 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
     );
   }
 }
-
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\profile_screen.dart
 Content:
@@ -2025,39 +2428,21 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   late Future<Map<String, dynamic>> _profileFuture;
 
-  Future<Map<String, dynamic>> _fetchProfileData() async {
+  Future<Map<String, dynamic>> _fetchProfileData(BuildContext context) async {
     try {
       print('Fetching profile data...');
       final authService = AuthService();
       final userData = await authService.getUserData();
       print('User data from auth service: $userData');
       final profileService = ProfileService();
-      final profileData = await profileService.getProfile();
+      final profileData = await profileService.getProfile(context); // Передаем контекст
       print('Profile data from profile service: $profileData');
-
-      // Find main job
-      final employment = List<Map<String, dynamic>>.from(userData['employment'] ?? []);
-      print('Employment data: $employment');
-      Map<String, dynamic> mainJob = {};
-      try {
-        mainJob = employment.firstWhere(
-              (job) => job['type'] == 'Основное место работы',
-          orElse: () => {},
-        );
-      } catch (e) {
-        print('Error finding main job: $e');
-      }
-
       // Combine data with priority to profile data
       final combinedData = {
         ...userData,
         ...profileData,
         'fullName': profileData['fullName'] ??
             '${userData['surname']} ${userData['name']} ${userData['patronymic']}'.trim(),
-        'position': mainJob['post'] ?? '',
-        'organization': mainJob['organization_name'] ?? '',
-        'department': mainJob['department_name'] ?? '',
-        'mainJob': mainJob,
       };
       print('Combined profile data: $combinedData');
       return combinedData;
@@ -2070,7 +2455,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
-    _profileFuture = _fetchProfileData();
+    _profileFuture = _fetchProfileData(context); // Передаем контекст
   }
 
   Future<void> _launchUrl(String label, String url) async {
@@ -2080,33 +2465,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
       return;
     }
-
     Uri? uri;
-
     // Автоматическое определение типа ссылки и её коррекция
-    if (label.toLowerCase() == 'vk' && !url.startsWith('http')) {
-      uri = Uri.parse('https://vk.com/$url');
+    if (label.toLowerCase() == 'vk' && !url.startsWith('https://vk.com/ ')) {
+      uri = Uri.parse('https://vk.com/ $url');
     } else if (label.toLowerCase() == 'telegram' && !url.startsWith('tg://')) {
       uri = Uri.parse('tg://resolve?domain=$url');
-    } else if (label.toLowerCase() == 'whatsapp' && !url.startsWith('https')) {
-      uri = Uri.parse('https://wa.me/$url');
+    } else if (label.toLowerCase() == 'whatsapp' && !url.startsWith('https://')) {
+      uri = Uri.parse('https://wa.me/ $url');
     } else if (url.startsWith('www.') || url.contains('.com') || url.contains('.ru')) {
       uri = Uri.parse('https://$url');
     } else {
       uri = Uri.tryParse(url);
     }
-
-    if (uri != null && await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
-      final fallbackUri = uri ?? Uri.parse('https://$url');
-      if (await canLaunchUrl(fallbackUri)) {
-        await launchUrl(fallbackUri, mode: LaunchMode.externalApplication);
+    if (uri != null) {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Не удалось открыть ссылку')),
-        );
+        final fallbackUri = uri;
+        if (await canLaunchUrl(fallbackUri)) {
+          await launchUrl(fallbackUri, mode: LaunchMode.externalApplication);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Не удалось открыть ссылку')),
+          );
+        }
       }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось открыть ссылку')),
+      );
     }
   }
 
@@ -2152,23 +2540,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   if (userData['phone']?.toString().isNotEmpty == true)
                     ProfileField(label: 'Телефон', value: userData['phone']?.toString() ?? ''),
                   const SizedBox(height: 20),
-                  Text(
-                    'Основное место работы',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  ProfileField(
-                    label: 'Организация',
-                    value: userData['organization']?.toString() ?? 'Не указано',
-                  ),
-                  ProfileField(
-                    label: 'Подразделение',
-                    value: userData['department']?.toString() ?? 'Не указано',
-                  ),
-                  ProfileField(
-                    label: 'Должность',
-                    value: userData['position']?.toString() ?? 'Не указано',
-                  ),
-                  const SizedBox(height: 20),
                   if (userData['links'] != null && userData['links'] is Map<String, dynamic>)
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2182,6 +2553,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ProfileLink(label: entry.key, url: entry.value, launchUrl: (l, u) => _launchUrl(l, u))).toList(),
                       ],
                     ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Места работы',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 10),
+                  ..._buildEmploymentList(userData['employment']),
                 ],
               ),
             );
@@ -2190,12 +2568,48 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
     );
   }
+
+  List<Widget> _buildEmploymentList(List<dynamic>? employment) {
+    if (employment == null || employment.isEmpty) {
+      return [Text('Нет информации о местах работы')];
+    }
+    // Находим основное место работы
+    final mainJob = employment.firstWhere(
+          (job) => job['type'] == 'Основное место работы',
+      orElse: () => null,
+    );
+    // Создаём список всех мест работы
+    final allJobs = employment.toList();
+    // Если основное место работы найдено, удаляем его из списка всех мест работы
+    if (mainJob != null) {
+      allJobs.remove(mainJob);
+    }
+    // Добавляем основное место работы в начало списка
+    if (mainJob != null) {
+      allJobs.insert(0, mainJob);
+    }
+    return allJobs.map((job) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${job['organization_name']} - ${job['department_name']} (${job['type']})',
+            style: TextStyle(fontSize: 16),
+          ),
+          Text(
+            job['post'],
+            style: TextStyle(fontSize: 14, color: Colors.grey),
+          ),
+          const SizedBox(height: 10),
+        ],
+      );
+    }).toList();
+  }
 }
 
 class ProfileField extends StatelessWidget {
   final String label;
   final String value;
-
   const ProfileField({Key? key, required this.label, required this.value}) : super(key: key);
 
   @override
@@ -2224,7 +2638,6 @@ class ProfileLink extends StatelessWidget {
   final String label;
   final String url;
   final Function(String, String) launchUrl;
-
   const ProfileLink({
     Key? key,
     required this.label,
@@ -2259,7 +2672,6 @@ class ProfileLink extends StatelessWidget {
     );
   }
 }
-
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\qr_code_screen.dart
 Content:
@@ -2268,7 +2680,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../services/auth_service.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-
+import 'login_screen.dart';
 class QrCodeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -2278,7 +2690,7 @@ class QrCodeScreen extends StatelessWidget {
         backgroundColor: Colors.yellow,
       ),
       body: FutureBuilder<Map<String, dynamic>>(
-        future: _getUserData(),
+        future: _getUserData(context), // Передаем контекст
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return Center(child: CircularProgressIndicator());
@@ -2324,43 +2736,47 @@ class QrCodeScreen extends StatelessWidget {
     );
   }
 
-  Future<Map<String, dynamic>> _getUserData() async {
+  Future<Map<String, dynamic>> _getUserData(BuildContext context) async {
     try {
       final authService = AuthService();
       final guid = await authService.getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID не найден');
+      final deviceId = await authService.getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID или deviceId не найдены');
       }
-
       final uri = Uri(
         scheme: 'https',
         host: 'mw.azs-topline.ru',
         port: 44445,
         path: '/hrm/hs/ewp/getQR',
       );
-
       final response = await http.get(
         uri,
         headers: {
           ...AuthService.baseHeaders,
           'ma-guid': guid,
+          'deviceId': deviceId, // Добавляем deviceId
         },
       ).timeout(Duration(seconds: 10));
-
+      print('Ответ сервера: ${response.body}');
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
-        print('Ответ сервера: $json');
-
         if (json['success'] == true && json['data'] != null) {
           final userData = json['data'];
-          print('Полученные данные пользователя из ответа сервера: $userData');
-
-          // Добавляем fullName для удобства отображения
           userData['fullName'] = '${userData['lastName'] ?? ''} ${userData['firstName'] ?? ''} ${userData['patronymic'] ?? ''}'.trim();
-
           return userData;
         } else {
-          throw Exception(json['error'] ?? 'Неизвестная ошибка');
+          if (json['error'] == 'Выход на других устройствах.') {
+            await authService.logout();
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (context) => LoginScreen()),
+                  (route) => false,
+            );
+            throw Exception('Вы вышли со всех устройств');
+          } else {
+            throw Exception(json['error'] ?? 'Неизвестная ошибка');
+          }
         }
       } else {
         throw Exception('HTTP-ошибка: ${response.statusCode}');
@@ -2382,17 +2798,19 @@ class QrCodeScreen extends StatelessWidget {
     });
   }
 }
-
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\registration_screen.dart
 Content:
 import 'package:flutter/material.dart';
-import 'package:flutter/gestures.dart';
+import 'package:flutter/cupertino.dart'; // Импортируем cupertino для CupertinoDatePicker
+import 'package:intl/intl.dart'; // Для форматирования даты
 import '../services/moderation_service.dart'; // Импортируем ModerationService
 import '../utils/error_handler.dart'; // Для обработки ошибок
 import 'package:url_launcher/url_launcher.dart'; // Для работы с ссылками
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import '../services/auth_service.dart'; // Импортируем AuthService
+import 'package:flutter/gestures.dart'; // Добавляем импорт для TapGestureRecognizer
 
 class RegistrationScreen extends StatefulWidget {
   @override
@@ -2403,20 +2821,44 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _surnameController = TextEditingController();
   final TextEditingController _patronymicController = TextEditingController();
-  final TextEditingController _birthdateController = TextEditingController();
   final TextEditingController _snilsController = TextEditingController();
   final TextEditingController _loginController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
-
   bool _isUserAgreementChecked = false; // Состояние чекбокса для пользовательского соглашения
   bool _isConsentPDChecked = false; // Состояние чекбокса для согласия на обработку ПД
   String _userAgreementUrl = ''; // URL пользовательского соглашения
   String _consentPDUrl = ''; // URL согласия на обработку ПД
+  final _formKey = GlobalKey<FormState>(); // Добавляем ключ для формы
+  DateTime? _selectedDate; // Добавляем переменную для хранения выбранной даты
+  String _errorMessage = ''; // Сообщение об ошибке
 
   @override
   void initState() {
     super.initState();
     _fetchAgreements(); // Загружаем ссылки на соглашения
+    _checkModerationStatus();
+  }
+
+  Future<void> _checkModerationStatus() async {
+    final moderationService = ModerationService();
+    final moderationGuid = await AuthService.getModerationGUID();
+    if (moderationGuid != null) {
+      try {
+        final moderationStatus = await moderationService.checkModerationStatus(moderationGuid);
+        if (moderationStatus['success'] == true) {
+          final status = moderationStatus['status'];
+          if (status == 'На модерации') {
+            setState(() {
+              _errorMessage = 'Дождитесь завершения предыдущей модерации';
+            });
+          } else {
+            await AuthService.clearModerationGUID(); // Удаляем GUID модерации, если статус не "На модерации"
+          }
+        }
+      } catch (e) {
+        print('Ошибка при проверке статуса модерации: $e');
+      }
+    }
   }
 
   Future<void> _fetchAgreements() async {
@@ -2447,8 +2889,169 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     }
   }
 
+  String? _validateName(String? value) {
+    if (value == null || value.isEmpty) {
+      return 'Обязательное поле';
+    }
+    if (value.contains(RegExp(r'[0-9]'))) {
+      return 'ФИО не может содержать числа';
+    }
+    return null;
+  }
+
+  String? _validatePatronymic(String? value) {
+    if (value != null && value.isNotEmpty && value.contains(RegExp(r'[0-9]'))) {
+      return 'ФИО не может содержать числа';
+    }
+    return null;
+  }
+
+  String? _validateLogin(String? value) {
+    if (value == null || value.isEmpty) {
+      return 'Обязательное поле';
+    }
+    return null;
+  }
+
+  String? _validatePassword(String? value) {
+    if (value == null || value.isEmpty) {
+      return 'Обязательное поле';
+    }
+    return null;
+  }
+
+  String? _formatSnils(String snils) {
+    final digits = snils.replaceAll(RegExp(r'\D'), '');
+    if (digits.length != 11) {
+      return null;
+    }
+    return '${digits.substring(0, 3)}-${digits.substring(3, 6)}-${digits.substring(6, 9)} ${digits.substring(9)}';
+  }
+
+  Future<void> _registerUser(BuildContext context) async {
+    if (_formKey.currentState?.validate() ?? false) {
+      final moderationService = ModerationService();
+      final moderationGuid = await AuthService.getModerationGUID();
+      if (moderationGuid != null) {
+        try {
+          final moderationStatus = await moderationService.checkModerationStatus(moderationGuid);
+          if (moderationStatus['success'] == true) {
+            final status = moderationStatus['status'];
+            if (status == 'На модерации') {
+              setState(() {
+                _errorMessage = 'Дождитесь завершения предыдущей модерации';
+              });
+              return;
+            }
+          }
+        } catch (e) {
+          print('Ошибка при проверке статуса модерации: $e');
+        }
+      }
+      final name = _capitalizeFirstLetter(_nameController.text.trim());
+      final surname = _capitalizeFirstLetter(_surnameController.text.trim());
+      final patronymic = _capitalizeFirstLetter(_patronymicController.text.trim());
+      final birthdate = _formatDate(_selectedDate!, format: 'yyyyMMdd'); // Используем формат yyyyMMdd для отправки на сервер
+      final snilsControllerValue = _snilsController.text.trim();
+      final formattedSnils = _formatSnils(snilsControllerValue);
+      if (formattedSnils == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Неверный формат СНИЛС')),
+        );
+        return;
+      }
+      final login = _loginController.text.trim();
+      final password = _passwordController.text.trim();
+      try {
+        final response = await moderationService.register(
+          name: name,
+          surname: surname,
+          patronymic: patronymic,
+          birthdate: birthdate, // Передаем выбранную дату в формате yyyyMMdd
+          snils: formattedSnils,
+          login: login,
+          password: password,
+        );
+        if (response['success'] == true) {
+          final guid = response['guid'];
+          final status = response['status'];
+          await moderationService.saveModerationGUID(guid); // Сохраняем GUID модерации
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Заявка отправлена на модерацию. Ожидайте в течение 2 дней.')),
+          );
+        } else {
+          handleError(context, 'Ошибка при регистрации: ${response['error']}');
+        }
+      } catch (e) {
+        handleError(context, 'Произошла ошибка: $e');
+      }
+    }
+  }
+
+  String _formatDate(DateTime date, {String format = 'dd.MM.yyyy'}) {
+    return DateFormat(format).format(date);
+  }
+
+  String _capitalizeFirstLetter(String value) {
+    if (value.isEmpty) return value;
+    return value[0].toUpperCase() + value.substring(1).toLowerCase();
+  }
+
+  Future<void> _selectDate(BuildContext context) async {
+    await showModalBottomSheet(
+      context: context,
+      builder: (BuildContext buildContext) {
+        return Container(
+          color: Colors.white,
+          child: Column(
+            children: [
+              SizedBox(height: 20),
+              Text(
+                'Выберите дату рождения',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 20),
+              Expanded(
+                child: CupertinoDatePicker(
+                  mode: CupertinoDatePickerMode.date,
+                  initialDateTime: _selectedDate ?? DateTime.now(),
+                  minimumDate: DateTime(1900),
+                  maximumDate: DateTime.now(),
+                  onDateTimeChanged: (DateTime newDate) {
+                    setState(() {
+                      _selectedDate = newDate;
+                    });
+                  },
+                  use24hFormat: true, // Используем 24-часовой формат
+                ),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                },
+                child: Text('OK'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final TapGestureRecognizer userAgreementTapRecognizer = TapGestureRecognizer()
+      ..onTap = () async {
+        if (_userAgreementUrl.isNotEmpty) {
+          await launchUrl(Uri.parse(_userAgreementUrl), mode: LaunchMode.externalApplication);
+        }
+      };
+    final TapGestureRecognizer consentPDTapRecognizer = TapGestureRecognizer()
+      ..onTap = () async {
+        if (_consentPDUrl.isNotEmpty) {
+          await launchUrl(Uri.parse(_consentPDUrl), mode: LaunchMode.externalApplication);
+        }
+      };
     return Scaffold(
       appBar: AppBar(
         title: Text('Регистрация'),
@@ -2456,168 +3059,228 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       ),
       body: SingleChildScrollView(
         padding: EdgeInsets.all(16),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            TextField(
-              controller: _nameController,
-              decoration: InputDecoration(labelText: 'Имя'),
-            ),
-            SizedBox(height: 10),
-            TextField(
-              controller: _surnameController,
-              decoration: InputDecoration(labelText: 'Фамилия'),
-            ),
-            SizedBox(height: 10),
-            TextField(
-              controller: _patronymicController,
-              decoration: InputDecoration(labelText: 'Отчество'),
-            ),
-            SizedBox(height: 10),
-            TextField(
-              controller: _birthdateController,
-              decoration: InputDecoration(labelText: 'Дата рождения (YYYYMMDD)'),
-            ),
-            SizedBox(height: 10),
-            TextField(
-              controller: _snilsController,
-              decoration: InputDecoration(labelText: 'СНИЛС (XXX-XXX-XXX XX)'),
-            ),
-            SizedBox(height: 10),
-            TextField(
-              controller: _loginController,
-              decoration: InputDecoration(labelText: 'Логин'),
-            ),
-            SizedBox(height: 10),
-            TextField(
-              controller: _passwordController,
-              decoration: InputDecoration(labelText: 'Пароль'),
-              obscureText: true,
-            ),
-            SizedBox(height: 20),
-            Row(
-              children: [
-                Checkbox(
-                  value: _isUserAgreementChecked,
-                  onChanged: (value) {
-                    setState(() {
-                      _isUserAgreementChecked = value ?? false;
-                    });
-                  },
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (_errorMessage.isNotEmpty)
+                Text(
+                  _errorMessage,
+                  style: TextStyle(color: Colors.red),
                 ),
-                Expanded(
-                  child: RichText(
-                    text: TextSpan(
-                      style: TextStyle(color: Colors.black),
-                      children: [
-                        TextSpan(text: 'Я согласен с '),
-                        TextSpan(
-                          text: 'условиями использования приложения',
-                          style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline),
-                          recognizer: TapGestureRecognizer()
-                            ..onTap = () async {
-                              if (_userAgreementUrl.isNotEmpty) {
-                                await launchUrl(Uri.parse(_userAgreementUrl), mode: LaunchMode.externalApplication);
-                              }
-                            },
-                        ),
-                      ],
+              SizedBox(height: 10),
+              Row(
+                children: [
+                  Text('* ', style: TextStyle(color: Colors.red)), // Обязательное поле
+                  Expanded(
+                    child: TextFormField(
+                      controller: _nameController,
+                      decoration: InputDecoration(labelText: 'Имя'),
+                      validator: _validateName,
+                      keyboardType: TextInputType.name,
+                      onChanged: (value) {
+                        _nameController.text = _capitalizeFirstLetter(value);
+                        _nameController.selection = TextSelection.collapsed(offset: _nameController.text.length);
+                      },
                     ),
                   ),
-                ),
-              ],
-            ),
-            Row(
-              children: [
-                Checkbox(
-                  value: _isConsentPDChecked,
-                  onChanged: (value) {
-                    setState(() {
-                      _isConsentPDChecked = value ?? false;
-                    });
-                  },
-                ),
-                Expanded(
-                  child: RichText(
-                    text: TextSpan(
-                      style: TextStyle(color: Colors.black),
-                      children: [
-                        TextSpan(text: 'Я согласен на '),
-                        TextSpan(
-                          text: 'обработку персональных данных',
-                          style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline),
-                          recognizer: TapGestureRecognizer()
-                            ..onTap = () async {
-                              if (_consentPDUrl.isNotEmpty) {
-                                await launchUrl(Uri.parse(_consentPDUrl), mode: LaunchMode.externalApplication);
-                              }
-                            },
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            SizedBox(height: 20),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _isUserAgreementChecked && _isConsentPDChecked ? Colors.green : Colors.grey,
+                ],
               ),
-              onPressed: _isUserAgreementChecked && _isConsentPDChecked
-                  ? () => _registerUser(context)
-                  : null,
-              child: Text('Зарегистрироваться'),
-            ),
-          ],
+              SizedBox(height: 10),
+              Row(
+                children: [
+                  Text('* ', style: TextStyle(color: Colors.red)), // Обязательное поле
+                  Expanded(
+                    child: TextFormField(
+                      controller: _surnameController,
+                      decoration: InputDecoration(labelText: 'Фамилия'),
+                      validator: _validateName,
+                      keyboardType: TextInputType.name,
+                      onChanged: (value) {
+                        _surnameController.text = _capitalizeFirstLetter(value);
+                        _surnameController.selection = TextSelection.collapsed(offset: _surnameController.text.length);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 10),
+              Row(
+                children: [
+                  Text(' ', style: TextStyle(color: Colors.transparent)), // Пустая звездочка для выравнивания
+                  Expanded(
+                    child: TextFormField(
+                      controller: _patronymicController,
+                      decoration: InputDecoration(labelText: 'Отчество'),
+                      validator: _validatePatronymic, // Используем новый валидатор для отчества
+                      keyboardType: TextInputType.name,
+                      onChanged: (value) {
+                        _patronymicController.text = _capitalizeFirstLetter(value);
+                        _patronymicController.selection = TextSelection.collapsed(offset: _patronymicController.text.length);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 10),
+              Row(
+                children: [
+                  Text('* ', style: TextStyle(color: Colors.red)), // Обязательное поле
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => _selectDate(context),
+                      child: AbsorbPointer(
+                        child: TextFormField(
+                          controller: TextEditingController(
+                            text: _selectedDate != null ? _formatDate(_selectedDate!) : '',
+                          ),
+                          decoration: InputDecoration(labelText: 'Дата рождения'),
+                          validator: (value) {
+                            if (_selectedDate == null) {
+                              return 'Обязательное поле';
+                            }
+                            return null;
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 10),
+              Row(
+                children: [
+                  Text('* ', style: TextStyle(color: Colors.red)), // Обязательное поле
+                  Expanded(
+                    child: TextFormField(
+                      controller: _snilsController,
+                      decoration: InputDecoration(labelText: 'СНИЛС (XXX-XXX-XXX XX)'),
+                      onChanged: (value) {
+                        final formattedSnils = _formatSnils(value);
+                        if (formattedSnils != null) {
+                          _snilsController.value = TextEditingValue(
+                            text: formattedSnils,
+                            selection: TextSelection.collapsed(offset: formattedSnils.length),
+                          );
+                        }
+                      },
+                      // Убираем валидацию СНИЛСа
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 10),
+              Row(
+                children: [
+                  Text('* ', style: TextStyle(color: Colors.red)), // Обязательное поле
+                  Expanded(
+                    child: TextFormField(
+                      controller: _loginController,
+                      decoration: InputDecoration(labelText: 'Login'),
+                      validator: _validateLogin,
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 10),
+              Row(
+                children: [
+                  Text('* ', style: TextStyle(color: Colors.red)), // Обязательное поле
+                  Expanded(
+                    child: TextFormField(
+                      controller: _passwordController,
+                      decoration: InputDecoration(labelText: 'Пароль'),
+                      obscureText: true,
+                      validator: _validatePassword,
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 20),
+              Row(
+                children: [
+                  Checkbox(
+                    value: _isUserAgreementChecked,
+                    onChanged: (value) {
+                      setState(() {
+                        _isUserAgreementChecked = value ?? false;
+                      });
+                    },
+                  ),
+                  Expanded(
+                    child: RichText(
+                      text: TextSpan(
+                        style: TextStyle(color: Colors.black),
+                        children: [
+                          TextSpan(text: 'Я согласен с '),
+                          TextSpan(
+                            text: 'условиями использования приложения',
+                            style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline),
+                            recognizer: userAgreementTapRecognizer,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  Checkbox(
+                    value: _isConsentPDChecked,
+                    onChanged: (value) {
+                      setState(() {
+                        _isConsentPDChecked = value ?? false;
+                      });
+                    },
+                  ),
+                  Expanded(
+                    child: RichText(
+                      text: TextSpan(
+                        style: TextStyle(color: Colors.black),
+                        children: [
+                          TextSpan(text: 'Я согласен на '),
+                          TextSpan(
+                            text: 'обработку персональных данных',
+                            style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline),
+                            recognizer: consentPDTapRecognizer,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 20),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _isUserAgreementChecked && _isConsentPDChecked ? Colors.green : Colors.grey,
+                ),
+                onPressed: _isUserAgreementChecked && _isConsentPDChecked
+                    ? () => _registerUser(context)
+                    : null,
+                child: Text('Зарегистрироваться'),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Future<void> _registerUser(BuildContext context) async {
-    final name = _nameController.text.trim();
-    final surname = _surnameController.text.trim();
-    final patronymic = _patronymicController.text.trim();
-    final birthdate = _birthdateController.text.trim();
-    final snils = _snilsController.text.trim();
-    final login = _loginController.text.trim();
-    final password = _passwordController.text.trim();
-    if (name.isEmpty ||
-        surname.isEmpty ||
-        birthdate.isEmpty ||
-        snils.isEmpty ||
-        login.isEmpty ||
-        password.isEmpty) {
-      handleError(context, 'Пожалуйста, заполните все обязательные поля');
-      return;
-    }
-    try {
-      final moderationService = ModerationService();
-      final response = await moderationService.registerUser(
-        name: name,
-        surname: surname,
-        patronymic: patronymic,
-        birthdate: birthdate,
-        snils: snils,
-        login: login,
-        password: password,
-      );
-      if (response['success'] == true) {
-        final guid = response['data']['GUID'];
-        await moderationService.saveModerationGUID(guid); // Сохраняем GUID
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Заявка отправлена на модерацию. Ожидайте в течение 2 дней.')),
-        );
-      } else {
-        handleError(context, 'Ошибка при регистрации: ${response['error']}');
-      }
-    } catch (e) {
-      handleError(context, 'Произошла ошибка: $e');
-    }
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _surnameController.dispose();
+    _patronymicController.dispose();
+    _snilsController.dispose();
+    _loginController.dispose();
+    _passwordController.dispose();
+    super.dispose();
   }
 }
-
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\services_screen.dart
 Content:
@@ -2767,12 +3430,12 @@ class _ServicesScreenState extends State<ServicesScreen> {
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\screens\settings_screen.dart
 Content:
 import 'package:flutter/material.dart';
-import '../services/auth_service.dart'; // Для работы с AuthService
-import '../services/delete_profile_service.dart'; // Импортируем новый сервис
-import './login_screen.dart'; // Для перехода на экран авторизации
-import './privacy_settings_screen.dart'; // Импортируем экран настроек приватности
-// Добавь импорт нового экрана в начале файла
-import '../screens/edit_profile_screen.dart';
+import '../services/auth_service.dart';
+import '../services/delete_profile_service.dart';
+import './login_screen.dart';
+import './privacy_settings_screen.dart';
+import './edit_profile_screen.dart';
+import '../services/logout_service.dart';
 
 class SettingsScreen extends StatelessWidget {
   @override
@@ -2815,6 +3478,13 @@ class SettingsScreen extends StatelessWidget {
               },
             ),
             ListTile(
+              title: Text('Выйти со всех устройств'),
+              leading: Icon(Icons.power_settings_new, color: Colors.red),
+              onTap: () {
+                _showExitOtherDevicesDialog(context);
+              },
+            ),
+            ListTile(
               title: Text('Удалить аккаунт'),
               leading: Icon(Icons.delete, color: Colors.red),
               onTap: () {
@@ -2827,7 +3497,6 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  // Метод для показа диалогового окна подтверждения выхода
   void _showLogoutDialog(BuildContext context) {
     showDialog(
       context: context,
@@ -2837,14 +3506,12 @@ class SettingsScreen extends StatelessWidget {
           content: Text('Вы уверены, что хотите выйти из аккаунта?'),
           actions: [
             TextButton(
-              onPressed: () {
-                Navigator.of(context).pop(); // Закрываем диалог
-              },
+              onPressed: () => Navigator.of(context).pop(),
               child: Text('Отмена'),
             ),
             TextButton(
               onPressed: () async {
-                Navigator.of(context).pop(); // Закрываем диалог
+                Navigator.of(context).pop();
                 await _logout(context);
               },
               child: Text('Да'),
@@ -2855,7 +3522,6 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  // Метод для показа диалогового окна подтверждения удаления аккаунта
   void _showDeleteAccountDialog(BuildContext context) {
     showDialog(
       context: context,
@@ -2865,14 +3531,12 @@ class SettingsScreen extends StatelessWidget {
           content: Text('Вы уверены, что хотите удалить свой аккаунт? Это действие необратимо.'),
           actions: [
             TextButton(
-              onPressed: () {
-                Navigator.of(context).pop(); // Закрываем диалог
-              },
+              onPressed: () => Navigator.of(context).pop(),
               child: Text('Отмена'),
             ),
             TextButton(
               onPressed: () async {
-                Navigator.of(context).pop(); // Закрываем диалог
+                Navigator.of(context).pop();
                 await _deleteAccount(context);
               },
               child: Text('Да', style: TextStyle(color: Colors.red)),
@@ -2883,73 +3547,118 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  // Метод для выхода из авторизации
+  void _showExitOtherDevicesDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Выйти со всех устройств'),
+          content: Text('Вы уверены, что хотите выйти со всех устройств?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text('Отмена'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _exitOtherDevices(context);
+              },
+              child: Text('Да', style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _logout(BuildContext context) async {
     try {
       final authService = AuthService();
-      await authService.logout(); // Очищаем данные пользователя и учетные данные
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (context) => LoginScreen()),
-            (route) => false, // Удаляем все предыдущие маршруты
-      );
+      await authService.logout();
+      _navigateToLoginScreen(context);
     } catch (e) {
-      print('Ошибка при выходе из аккаунта: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Произошла ошибка: $e')),
-      );
+      _showErrorSnackbar(context, 'Ошибка при выходе из аккаунта: $e');
     }
   }
 
-  // Метод для удаления аккаунта
   Future<void> _deleteAccount(BuildContext context) async {
     try {
       final deleteProfileService = DeleteProfileService();
-      final success = await deleteProfileService.deleteProfile();
+      final success = await deleteProfileService.deleteProfile(context);
       if (success) {
         final authService = AuthService();
-        await authService.logout(); // Очищаем данные пользователя и учетные данные
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (context) => LoginScreen()),
-              (route) => false, // Удаляем все предыдущие маршруты
-        );
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Аккаунт успешно удален')),
-        );
+        await authService.logout();
+        _navigateToLoginScreen(context);
+        _showSuccessSnackbar(context, 'Аккаунт успешно удален');
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка при удалении аккаунта')),
-        );
+        _showErrorSnackbar(context, 'Ошибка при удалении аккаунта');
       }
     } catch (e) {
-      print('Ошибка при удалении аккаунта: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Произошла ошибка: $e')),
-      );
+      _showErrorSnackbar(context, 'Ошибка при удалении аккаунта: $e');
     }
   }
-}
 
+  Future<void> _exitOtherDevices(BuildContext context) async {
+    try {
+      final result = await LogoutService.exitOtherDevices();
+
+      if (result['error'] == 'Выход на других устройствах.') {
+        // Если сервер вернул ошибку о выходе на других устройствах
+        await AuthService().logout();
+        _navigateToLoginScreen(context);
+        return;
+      }
+
+      if (result['success'] == true) {
+        _showSuccessSnackbar(context, 'Вы успешно вышли со всех устройств');
+      } else {
+        _showErrorSnackbar(context, 'Ошибка: ${result['error']}');
+      }
+    } catch (e) {
+      _showErrorSnackbar(context, 'Ошибка: $e');
+    }
+  }
+
+  void _navigateToLoginScreen(BuildContext context) {
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (context) => LoginScreen()),
+          (route) => false,
+    );
+  }
+
+  void _showSuccessSnackbar(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  void _showErrorSnackbar(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+}
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\apps_service.dart
 Content:
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
-import '../../utils/constants.dart';
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
 
 class AppsService {
-  static const String _baseUrl = 'mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
 
   Future<List<Map<String, dynamic>>> getApps() async {
     try {
       final guid = await AuthService().getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID не найден');
+      final deviceId = await AuthService().getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID или deviceId не найдены');
       }
-      // Корректное формирование URI с портом
       final uri = Uri(
         scheme: 'https',
         host: _baseUrl,
@@ -2962,6 +3671,7 @@ class AppsService {
         headers: {
           ...AppConstants.baseHeaders,
           'ma-guid': guid,
+          'deviceId': deviceId, // Добавляем deviceId
         },
       ).timeout(Duration(seconds: 10));
       print('Статус-код ответа: ${response.statusCode}');
@@ -2972,7 +3682,13 @@ class AppsService {
           final apps = List<Map<String, dynamic>>.from(json['data']['list']);
           return apps;
         } else {
-          throw Exception('Ошибка в структуре ответа: ${json['error']}');
+          if (json['error'] == 'Выход на других устройствах.') {
+            final authService = AuthService();
+            await authService.logout();
+            throw Exception('Вы вышли со всех устройств');
+          } else {
+            throw Exception('Ошибка в структуре ответа: ${json['error']}');
+          }
         }
       } else {
         throw Exception('HTTP-ошибка: ${response.statusCode}');
@@ -2983,11 +3699,9 @@ class AppsService {
     }
   }
 }
-
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\auth_service.dart
 Content:
-// lib/services/auth_service.dart
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
@@ -2996,6 +3710,7 @@ import 'package:flutter/material.dart';
 import '../../models/device_info.dart';
 import 'device_info_service.dart';
 import '../../utils/constants.dart';
+import '../screens/confirm_phone_screen.dart'; // Импорт ConfirmPhoneScreen
 
 class AuthService {
   static const String _baseUrl = AppConstants.baseUrl;
@@ -3005,16 +3720,20 @@ class AuthService {
     'ma-key': '0YHQtdC60YDQtdGC0L3Ri9C50LrQu9GO0Yc=',
     'Content-Type': 'application/json',
   };
+  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+  static NavigatorState? get navigator => navigatorKey.currentState;
 
   Future<Map<String, dynamic>> newLogin(String login, String password, BuildContext context) async {
     try {
       final deviceInfo = await DeviceInfoService.getDeviceInfo(context);
       print('Собранная информация об устройстве: ${deviceInfo.toJson()}');
-      final uri = mwUri('new_authorization');
+      final uri = mwUri('authorization');
       final bodyMap = {
         "deviceInfo": deviceInfo.toJson(),
         "login": login,
         "password": password,
+        "recovery": false,
+        "phone": ""
       };
       final body = base64Encode(utf8.encode(jsonEncode(bodyMap)));
       print('Запрос к URI: $uri');
@@ -3053,9 +3772,12 @@ class AuthService {
             'organization': mainJob['organization_name'] ?? '',
             'department': mainJob['department_name'] ?? '',
             'mainOrganizationGuid': mainJob['organization_guid'] ?? '',
+            'askHim': askHim, // Сохраняем askHim в userData
+            'deviceId': deviceId, // Сохраняем deviceId в userData
           };
           // Сохраняем данные здесь
           await _saveCredentials(login, password, guid, deviceId);
+          await _saveUserData(userData);
           if (askHim != null && oktell) {
             return {
               'success': true,
@@ -3065,8 +3787,7 @@ class AuthService {
               'askHim': askHim,
             };
           } else {
-            // Если блока askHim нет, сразу сохраняем данные и переходим на главный экран
-            await _saveUserData(userData);
+            // Если блока askHim нет, сразу переходим на главный экран
             return {
               'success': true,
               'data': data,
@@ -3087,7 +3808,13 @@ class AuthService {
     }
   }
 
-  Future<bool> confirmDevice({required String code, required String login, required String password, required String deviceId, required BuildContext context}) async {
+  Future<bool> confirmDevice({
+    required String code,
+    required String login,
+    required String password,
+    required String deviceId,
+    required BuildContext context,
+  }) async {
     try {
       final guid = await getGUID();
       if (guid == null || guid.isEmpty) {
@@ -3114,6 +3841,11 @@ class AuthService {
       print('Статус-код подтверждения: ${response.statusCode}');
       print('Ответ сервера: ${response.body}');
       if (response.statusCode == 200) {
+        // Проверяем, пустое ли тело ответа
+        if (response.body.isEmpty) {
+          print('Тело ответа пустое, считаем подтверждение успешным');
+          return true;
+        }
         final json = jsonDecode(response.body);
         if (json['success'] == true && json['data'] != null) {
           final data = json['data'];
@@ -3136,9 +3868,10 @@ class AuthService {
             'department': mainJob['department_name'] ?? '',
             'mainOrganizationGuid': mainJob['organization_guid'] ?? '',
             'employment': employment,
+            'askHim': null, // Убираем askHim после подтверждения
+            'deviceId': deviceId, // Сохраняем deviceId в userData
           };
           await _saveUserData(userData);
-          await _saveCredentials(login, password, guid, deviceId);
           return true;
         } else {
           throw Exception(json['error'] ?? 'Ошибка подтверждения устройства');
@@ -3149,6 +3882,107 @@ class AuthService {
     } catch (e) {
       print('Ошибка подтверждения устройства: $e');
       rethrow;
+    }
+  }
+
+  Future<bool> backgroundLogin() async {
+    try {
+      final email = await getEmail();
+      final password = await getPassword();
+      final guid = await getGUID();
+      final deviceId = await getDeviceId();
+      if (email == null || email.isEmpty || password == null || password.isEmpty || guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        return false;
+      }
+      final deviceInfo = await DeviceInfoService.getDeviceInfo(null); // Получаем актуальную информацию об устройстве без контекста
+      final uri = mwUri('authorization');
+      final bodyMap = {
+        "deviceInfo": deviceInfo.toJson(),
+        "login": email,
+        "password": password,
+        "recovery": false,
+        "phone": ""
+      };
+      final body = base64Encode(utf8.encode(jsonEncode(bodyMap)));
+      final headers = {
+        ...AuthService.baseHeaders,
+        'ma-guid': guid,
+      };
+      print('Фоновая авторизация: $uri');
+      print('Headers: $headers');
+      print('Body: $body');
+      final response = await http.post(
+        uri,
+        headers: headers,
+        body: body,
+      ).timeout(Duration(seconds: 10));
+      print('Статус-код фоновой авторизации: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        print('Ответ сервера: $json');
+        if (json['success'] == true && json['data'] != null) {
+          final data = json['data'];
+          final askHim = data['askHim'];
+          final oktell = askHim?['oktell'] ?? false;
+          final person = data['person'];
+          final employment = List<Map<String, dynamic>>.from(person['employment'] ?? []);
+          final mainJob = employment.firstWhere(
+                (job) => job['type'] == 'Основное место работы',
+            orElse: () => {},
+          );
+          final userData = {
+            'guid': person['guid'],
+            'firstName': person['firstName'] ?? '',
+            'lastName': person['lastName'] ?? '',
+            'patronymic': person['patronymic'] ?? '',
+            'phone': person['phone'] ?? '',
+            'email': person['email'] ?? '',
+            'snils': person['snils'] ?? '',
+            'position': mainJob['post'] ?? '',
+            'organization': mainJob['organization_name'] ?? '',
+            'department': mainJob['department_name'] ?? '',
+            'mainOrganizationGuid': mainJob['organization_guid'] ?? '',
+            'employment': employment,
+            'askHim': askHim, // Сохраняем askHim в userData
+            'deviceId': deviceInfo.deviceId, // Сохраняем deviceId в userData
+          };
+          if (askHim != null && oktell) {
+            // Сохраняем временные данные пользователя
+            await _saveCredentials(email, password, guid, deviceId);
+            await _saveUserData(userData);
+            // Перенаправляем на ConfirmPhoneScreen без BuildContext
+            // Это нужно сделать через навигацию из основного потока, так как мы не можем использовать BuildContext в фоновом режиме
+            WidgetsFlutterBinding.ensureInitialized();
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              AuthService.navigator?.pushReplacement(
+                MaterialPageRoute(
+                  builder: (context) => ConfirmPhoneScreen(
+                    newPhone: email,
+                    guid: guid,
+                    deviceId: deviceId,
+                  ),
+                ),
+              );
+            });
+            return false; // Возвращаем false, так как пользователь перенаправлен на другой экран
+          } else {
+            await _saveCredentials(email, password, guid, deviceId);
+            await _saveUserData(userData);
+            return true;
+          }
+        } else if (json['error'] == 'Выход на других устройствах.') {
+          await logout();
+          return false;
+        } else {
+          throw Exception(json['error'] ?? 'Неизвестная ошибка авторизации');
+        }
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при фоновой авторизации: $e');
+      return false;
     }
   }
 
@@ -3203,17 +4037,49 @@ class AuthService {
     await prefs.remove('email');
     await prefs.remove('password');
     await prefs.remove('deviceId');
+    await prefs.remove('moderation_guid'); // Удаляем GUID модерации при выходе
     print('Данные пользователя удалены');
   }
-}
 
-Uri mwUri(String method) {
-  return Uri(
-    scheme: 'https',
-    host: AppConstants.baseUrl,
-    port: AppConstants.port,
-    path: '/hrm/hs/ewp/$method',
-  );
+  Future<DeviceInfo> getDeviceInfo(BuildContext? context) async {
+    return await DeviceInfoService.getDeviceInfo(context);
+  }
+
+  static Future<void> saveCredentials(String email, String password, String guid, String deviceId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('email', email);
+    await prefs.setString('password', password);
+    await prefs.setString('guid', guid);
+    await prefs.setString('deviceId', deviceId);
+    print('Учетные данные сохранены');
+  }
+
+  static Uri mwUri(String method) {
+    return Uri(
+      scheme: 'https',
+      host: _baseUrl,
+      port: _port,
+      path: '/hrm/hs/ewp/$method',
+    );
+  }
+
+  // Новые методы для работы с GUID модерации
+  static Future<String?> getModerationGUID() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('moderation_guid');
+  }
+
+  Future<void> saveModerationGUID(String guid) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('moderation_guid', guid);
+    print('GUID модерации сохранен: $guid');
+  }
+
+  static Future<void> clearModerationGUID() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('moderation_guid');
+    print('GUID модерации удален');
+  }
 }
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\colleagues_service.dart
@@ -3222,10 +4088,11 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
 import '../models/colleague.dart';
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
 
 class ColleaguesService {
-  static const String _baseUrl = 'mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
 
   Future<List<Colleague>> getColleagues({
     String? organizationGuid,
@@ -3233,10 +4100,10 @@ class ColleaguesService {
   }) async {
     try {
       final guid = await AuthService().getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID не найден');
+      final deviceId = await AuthService().getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID или deviceId не найдены');
       }
-      // Формируем queryParameters только если параметры переданы
       final Map<String, String> queryParameters = {};
       if (organizationGuid != null && organizationGuid.isNotEmpty) {
         queryParameters['guidorg'] = organizationGuid;
@@ -3255,8 +4122,9 @@ class ColleaguesService {
       final response = await http.get(
         uri,
         headers: {
-          ...AuthService.baseHeaders,
+          ...AppConstants.baseHeaders,
           'ma-guid': guid,
+          'deviceId': deviceId, // Добавляем deviceId
         },
       ).timeout(Duration(seconds: 10));
       print('Статус-код ответа: ${response.statusCode}');
@@ -3270,6 +4138,9 @@ class ColleaguesService {
               .toList();
           print('Получен список коллег: $colleagues');
           return colleagues;
+        } else if (json['error'] == 'Выход на других устройствах.') {
+          await AuthService().logout();
+          throw Exception('Вы вышли со всех устройств');
         } else {
           throw Exception('Ошибка в структуре ответа: ${json['error']}');
         }
@@ -3282,23 +4153,25 @@ class ColleaguesService {
     }
   }
 }
-
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\colleague_card_service.dart
 Content:
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
-
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
+import '../screens/login_screen.dart';
+import 'package:flutter/material.dart';
 class ColleagueCardService {
-  static const String _baseUrl = 'mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
 
-  Future<Map<String, dynamic>> getColleagueCard({required String guidCollegue}) async {
+  Future<Map<String, dynamic>> getColleagueCard({required String guidCollegue, required BuildContext context}) async {
     try {
       final guid = await AuthService().getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID не найден');
+      final deviceId = await AuthService().getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID или deviceId не найдены');
       }
       final uri = Uri(
         scheme: 'https',
@@ -3313,16 +4186,37 @@ class ColleagueCardService {
       final response = await http.get(
         uri,
         headers: {
-          ...AuthService.baseHeaders,
+          ...AppConstants.baseHeaders,
           'ma-guid': guid,
+          'deviceId': deviceId, // Добавляем deviceId
         },
       ).timeout(Duration(seconds: 10));
       print('Статус-код ответа: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
         print('Ответ сервера: $json');
         if (json['success'] == true && json['data'] != null) {
-          return json['data']; // Изменено: извлекаем данные из поля 'data'
+          final data = json['data'];
+          final employment = List<Map<String, dynamic>>.from(data['employment'] ?? []);
+          final mainJob = employment.firstWhere(
+                (job) => job['type'] == 'Основное место работы',
+            orElse: () => {},
+          );
+          if (mainJob.isNotEmpty) {
+            employment.remove(mainJob);
+            employment.insert(0, mainJob);
+          }
+          data['employment'] = employment;
+          return data; // Изменено: извлекаем данные из поля 'data'
+        } else if (json['error'] == 'Выход на других устройствах.') {
+          await AuthService().logout();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => LoginScreen()),
+                (route) => false,
+          );
+          throw Exception('Вы вышли со всех устройств');
         } else {
           throw Exception(json['error'] ?? 'Неизвестная ошибка');
         }
@@ -3335,25 +4229,27 @@ class ColleagueCardService {
     }
   }
 }
-
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\delete_profile_service.dart
 Content:
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
-
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
+import 'package:flutter/material.dart';
+import '../screens/login_screen.dart';
 class DeleteProfileService {
-  static const String _baseUrl = 'mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
 
-  Future<bool> deleteProfile() async {
+  Future<bool> deleteProfile(BuildContext context) async {
     try {
       final guid = await AuthService().getGUID();
       final email = await AuthService().getEmail();
       final password = await AuthService().getPassword();
-      if (guid == null || guid.isEmpty || email == null || email.isEmpty || password == null || password.isEmpty) {
-        throw Exception('GUID, логин или пароль не найдены');
+      final deviceId = await AuthService().getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || email == null || email.isEmpty || password == null || password.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID, логин, пароль или deviceId не найдены');
       }
       final uri = Uri(
         scheme: 'https',
@@ -3367,9 +4263,10 @@ class DeleteProfileService {
       };
       final body = base64Encode(utf8.encode(jsonEncode(bodyMap)));
       final headers = {
-        ...AuthService.baseHeaders,
-        'ma-guid': guid, // ma-guid не шифруется в Base64
-      } as Map<String, String>; // Явное преобразование в Map<String, String>
+        ...AppConstants.baseHeaders,
+        'ma-guid': guid,
+        'deviceId': deviceId, // Добавляем deviceId
+      } as Map<String, String>;
       print('URI: $uri');
       print('Headers: $headers');
       print('Body: $body');
@@ -3384,6 +4281,14 @@ class DeleteProfileService {
         final json = jsonDecode(response.body);
         if (json['success'] == true) {
           return true;
+        } else if (json['error'] == 'Выход на других устройствах.') {
+          await AuthService().logout();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => LoginScreen()),
+                (route) => false,
+          );
+          throw Exception('Вы вышли со всех устройств');
         } else {
           throw Exception('Ошибка в структуре ответа: ${json['error']}');
         }
@@ -3396,7 +4301,6 @@ class DeleteProfileService {
     }
   }
 }
-
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\departments_service.dart
 Content:
@@ -3404,19 +4308,23 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/department.dart';
 import '../services/auth_service.dart';
-
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
+import '../screens/login_screen.dart';
+import 'package:flutter/material.dart';
 class DepartmentsService {
-  static const String _baseUrl = 'mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
 
   Future<List<Department>> getDepartments({
     required String organizationGuid,
+    required BuildContext context,
   }) async {
     try {
       print('Getting departments for organization: $organizationGuid');
       final userGuid = await AuthService().getGUID();
-      if (userGuid == null || userGuid.isEmpty) {
-        throw Exception('GUID пользователя не найден');
+      final deviceId = await AuthService().getDeviceId(); // Получаем deviceId
+      if (userGuid == null || userGuid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID пользователя или deviceId не найдены');
       }
       final uri = Uri(
         scheme: 'https',
@@ -3425,9 +4333,10 @@ class DepartmentsService {
         path: '/hrm/hs/ewp/departments',
       );
       final headers = {
-        ...AuthService.baseHeaders,
+        ...AppConstants.baseHeaders,
         'ma-guid': userGuid,
         'guid-org': organizationGuid,
+        'deviceId': deviceId, // Добавляем deviceId
       };
       print('Request headers: $headers');
       final response = await http.get(
@@ -3450,6 +4359,14 @@ class DepartmentsService {
             }
           }).toList();
           return departments.where((d) => d.guid.isNotEmpty).toList();
+        } else if (json['error'] == 'Выход на других устройствах.') {
+          await AuthService().logout();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => LoginScreen()),
+                (route) => false,
+          );
+          throw Exception('Вы вышли со всех устройств');
         } else {
           throw Exception(json['error'] ?? 'Неизвестная ошибка');
         }
@@ -3462,23 +4379,22 @@ class DepartmentsService {
     }
   }
 }
-
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\device_confirmation_service.dart
 Content:
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
-import 'device_info_service.dart'; // Добавляем импорт DeviceInfoService
 import 'package:flutter/material.dart'; // Для BuildContext
 import '../../utils/constants.dart';
+
 class DeviceConfirmationService {
   static const String _baseUrl = AppConstants.baseUrl;
   static const int _port = AppConstants.port;
 
   static Future<Map<String, dynamic>> confirmDevice({
     required String code,
-    required String deviceId, // Добавляем deviceId как параметр
+    required String deviceId, // deviceId уже передается как параметр
   }) async {
     try {
       final guid = await AuthService().getGUID();
@@ -3494,7 +4410,7 @@ class DeviceConfirmationService {
         path: '/hrm/hs/ewp/device_confirmed',
       );
       final headers = {
-        ...AuthService.baseHeaders,
+        ...AppConstants.baseHeaders,
         'ma-guid': guid,
         'deviceId': deviceId,
       };
@@ -3528,37 +4444,58 @@ class DeviceConfirmationService {
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\device_info_service.dart
 Content:
-// lib/services/device_info_service.dart
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart'; // Для BuildContext и платформы
 import '../../models/device_info.dart';
+import 'package:package_info_plus/package_info_plus.dart'; // Импортируем package_info_plus для получения версии приложения
 
 class DeviceInfoService {
-  static Future<DeviceInfo> getDeviceInfo(BuildContext context) async {
+  static Future<DeviceInfo> getDeviceInfo(BuildContext? context) async {
     final deviceInfoPlugin = DeviceInfoPlugin();
-    if (Theme.of(context).platform == TargetPlatform.android) {
-      final androidInfo = await deviceInfoPlugin.androidInfo;
-      final deviceInfo = DeviceInfo(
-        os: 'Android',
-        brief: 'Android ${androidInfo.version.release} (SDK ${androidInfo.version.sdkInt}), ${androidInfo.manufacturer} ${androidInfo.model}',
-        deviceId: androidInfo.id,
-        appVersion: '1.0.0', // Здесь можно использовать версию приложения
-      );
-      print('Собранная информация об устройстве: ${deviceInfo.toJson()}'); // Добавляем логирование
-      return deviceInfo;
-    } else if (Theme.of(context).platform == TargetPlatform.iOS) {
-      final iosInfo = await deviceInfoPlugin.iosInfo;
-      final deviceInfo = DeviceInfo(
-        os: 'iOS',
-        brief: 'iOS ${iosInfo.systemVersion}, ${iosInfo.model}',
-        deviceId: iosInfo.identifierForVendor!,
-        appVersion: '1.0.0', // Здесь можно использовать версию приложения
-      );
-      print('Собранная информация об устройстве: ${deviceInfo.toJson()}'); // Добавляем логирование
-      return deviceInfo;
+    String os;
+    String brief;
+    String deviceId;
+    String appVersion;
+
+    if (context != null) {
+      if (Theme.of(context).platform == TargetPlatform.android) {
+        final androidInfo = await deviceInfoPlugin.androidInfo;
+        os = 'Android';
+        brief = 'Android ${androidInfo.version.release} (SDK ${androidInfo.version.sdkInt})';
+        deviceId = androidInfo.id;
+      } else if (Theme.of(context).platform == TargetPlatform.iOS) {
+        final iosInfo = await deviceInfoPlugin.iosInfo;
+        os = 'iOS';
+        brief = 'iOS ${iosInfo.systemVersion}';
+        deviceId = iosInfo.identifierForVendor!;
+      } else {
+        throw UnsupportedError('Unsupported platform');
+      }
     } else {
-      throw UnsupportedError('Unsupported platform');
+      // Если контекста нет, используем стандартные значения или получаем deviceId из SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      deviceId = prefs.getString('deviceId') ?? '';
+      if (deviceId.isEmpty) {
+        throw Exception('deviceId не найден');
+      }
+      os = 'Android'; // Предполагаем, что устройство Android, если контекст отсутствует
+      brief = 'Android 13 (SDK 33)'; // Используем стандартные значения
     }
+
+    // Получаем версию приложения
+    final packageInfo = await PackageInfo.fromPlatform();
+    appVersion = packageInfo.version;
+
+    final deviceInfo = DeviceInfo(
+      os: os,
+      brief: brief,
+      deviceId: deviceId,
+      appVersion: appVersion,
+    );
+
+    print('Собранная информация об устройстве: ${deviceInfo.toJson()}'); // Добавляем логирование
+    return deviceInfo;
   }
 }
 --------------------------------------------------
@@ -3567,17 +4504,20 @@ Content:
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
-
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
+import 'package:flutter/material.dart';
+import '../screens/login_screen.dart';
 class FavoritesService {
-  static const String _baseUrl = 'mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
 
   // Метод для добавления сотрудника в избранное
-  Future<bool> addToFavorites(String guidSelected) async {
+  Future<bool> addToFavorites({required String guidSelected, required BuildContext context}) async {
     try {
       final guid = await AuthService().getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID не найден');
+      final deviceId = await AuthService().getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID или deviceId не найдены');
       }
       final uri = Uri(
         scheme: 'https',
@@ -3590,8 +4530,9 @@ class FavoritesService {
       final response = await http.post(
         uri,
         headers: {
-          ...AuthService.baseHeaders,
+          ...AppConstants.baseHeaders,
           'ma-guid': guid,
+          'deviceId': deviceId, // Добавляем deviceId
         },
         body: body,
       ).timeout(Duration(seconds: 10));
@@ -3601,6 +4542,14 @@ class FavoritesService {
         final json = jsonDecode(response.body);
         if (json['success'] == true && json['data'] != null) {
           return true;
+        } else if (json['error'] == 'Выход на других устройствах.') {
+          await AuthService().logout();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => LoginScreen()),
+                (route) => false,
+          );
+          throw Exception('Вы вышли со всех устройств');
         } else {
           throw Exception('Ошибка в структуре ответа: ${json['error']}');
         }
@@ -3622,11 +4571,12 @@ class FavoritesService {
   }
 
   // Метод для удаления сотрудника из избранного
-  Future<bool> removeFromFavorites(String guidSelected) async {
+  Future<bool> removeFromFavorites({required String guidSelected, required BuildContext context}) async {
     try {
       final guid = await AuthService().getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID не найден');
+      final deviceId = await AuthService().getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID или deviceId не найдены');
       }
       final uri = Uri(
         scheme: 'https',
@@ -3639,8 +4589,9 @@ class FavoritesService {
       final response = await http.post(
         uri,
         headers: {
-          ...AuthService.baseHeaders,
+          ...AppConstants.baseHeaders,
           'ma-guid': guid,
+          'deviceId': deviceId, // Добавляем deviceId
         },
         body: body,
       ).timeout(Duration(seconds: 10));
@@ -3650,6 +4601,14 @@ class FavoritesService {
         final json = jsonDecode(response.body);
         if (json['success'] == true && json['data'] != null) {
           return true;
+        } else if (json['error'] == 'Выход на других устройствах.') {
+          await AuthService().logout();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => LoginScreen()),
+                (route) => false,
+          );
+          throw Exception('Вы вышли со всех устройств');
         } else {
           throw Exception('Ошибка в структуре ответа: ${json['error']}');
         }
@@ -3670,7 +4629,67 @@ class FavoritesService {
     }
   }
 }
+--------------------------------------------------
+File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\logout_service.dart
+Content:
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'auth_service.dart';
+import '../../utils/constants.dart';
 
+class LogoutService {
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
+
+  static Future<Map<String, dynamic>> exitOtherDevices() async {
+    try {
+      final authService = AuthService();
+      final guid = await authService.getGUID();
+      final deviceId = await authService.getDeviceId();
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID или deviceId не найдены');
+      }
+
+      final uri = Uri(
+        scheme: 'https',
+        host: _baseUrl,
+        port: _port,
+        path: '/hrm/hs/ewp/exit_other_devices',
+      );
+
+      final headers = {
+        ...AppConstants.baseHeaders,
+        'ma-guid': guid,
+        'deviceId': deviceId,
+      };
+
+      final response = await http.put(
+        uri,
+        headers: headers,
+      ).timeout(Duration(seconds: 10));
+
+      print('Статус-код выхода со всех устройств: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        return {
+          'success': json['success'] == true,
+          'data': json['data'],
+          'error': json['error'] ?? '',
+        };
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Ошибка при выходе со всех устройств: $e');
+      return {
+        'success': false,
+        'error': e.toString(),
+      };
+    }
+  }
+}
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\moderation_service.dart
 Content:
@@ -3686,16 +4705,18 @@ class ModerationService {
 
   // Вспомогательная функция для формирования URI
   Uri _buildUri(String method) {
-    return Uri(
+    final uri = Uri(
       scheme: 'https',
       host: _baseUrl,
       port: _port,
       path: '/hrm/hs/ewp/$method',
     );
+    print('Сформированный URI: $uri'); // Логирование URI
+    return uri;
   }
 
   // Метод регистрации пользователя
-  Future<Map<String, dynamic>> registerUser({
+  Future<Map<String, dynamic>> register({
     required String name,
     required String surname,
     required String patronymic,
@@ -3706,38 +4727,44 @@ class ModerationService {
   }) async {
     try {
       final uri = _buildUri('registration');
-
       // Формируем тело запроса
+      final formattedSnils = _formatSnils(snils);
+      if (formattedSnils == null) {
+        throw Exception('Неверный формат СНИЛС');
+      }
       final bodyMap = {
         "name": name,
         "surname": surname,
         "patronymic": patronymic,
-        "birthdate": birthdate,
-        "snils": snils,
+        "birthdate": birthdate.replaceAll('-', '').replaceAll(' ', ''),
+        "snils": formattedSnils.replaceAll('-', '').replaceAll(' ', ''),
         "login": login,
         "password": password,
       };
-
       // Кодируем тело запроса в Base64
       Codec stringToBase64 = utf8.fuse(base64);
       final body = stringToBase64.encode(jsonEncode(bodyMap));
-
+      print('Тело запроса (Base64): $body'); // Логирование тела запроса
+      // Логирование заголовков
+      print('Заголовки запроса: ${AppConstants.baseHeaders}');
       final response = await http.post(
         uri,
         headers: AppConstants.baseHeaders,
         body: body,
       );
-
       print('Статус-код регистрации: ${response.statusCode}');
       print('Ответ сервера: ${response.body}');
-
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
         if (json['success'] == true && json['data'] != null) {
+          final guid = json['data']['GUID'];
+          final status = json['data']['status'];
+          // Сохраняем GUID локально
+          await saveModerationGUID(guid);
           return {
             'success': true,
-            'data': json['data'],
-            'error': '',
+            'guid': guid,
+            'status': status,
           };
         } else {
           throw Exception(json['error'] ?? 'Неизвестная ошибка');
@@ -3746,7 +4773,7 @@ class ModerationService {
         throw Exception('HTTP-ошибка: ${response.statusCode}');
       }
     } catch (e) {
-      print('Ошибка при регистрации пользователя: $e');
+      print('Ошибка при регистрации: $e');
       rethrow;
     }
   }
@@ -3755,33 +4782,29 @@ class ModerationService {
   Future<Map<String, dynamic>> checkModerationStatus(String guid) async {
     try {
       final uri = _buildUri('moderation');
-
       // Формируем тело запроса
       final bodyMap = {"GUID": guid};
-
       // Кодируем тело запроса в Base64
       Codec stringToBase64 = utf8.fuse(base64);
       final body = stringToBase64.encode(jsonEncode(bodyMap));
-
+      print('Тело запроса (Base64): $body'); // Логирование тела запроса
+      // Логирование заголовков
+      print('Заголовки запроса: ${AppConstants.baseHeaders}');
       final response = await http.post(
         uri,
         headers: AppConstants.baseHeaders,
         body: body,
       );
-
       print('Статус-код модерации: ${response.statusCode}');
       print('Ответ сервера: ${response.body}');
-
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
         if (json['success'] == true && json['data'] != null) {
-          final status = json['data'];
-
-          // Если статус отличается от "На модерации", удаляем GUID
+          final status = json['data']; // Изменено: убираем индексацию
+          // Если статус не "На модерации", удаляем GUID
           if (status != 'На модерации') {
             await clearModerationGUID();
           }
-
           return {
             'success': true,
             'status': status,
@@ -3817,23 +4840,40 @@ class ModerationService {
     await prefs.remove('moderation_guid');
     print('GUID модерации удален');
   }
-}
 
+  // Метод форматирования СНИЛСа
+  String? _formatSnils(String snils) {
+    final digits = snils.replaceAll(RegExp(r'\D'), '');
+    if (digits.length != 11) {
+      return null;
+    }
+    return '${digits.substring(0, 3)}-${digits.substring(3, 6)}-${digits.substring(6, 9)} ${digits.substring(9)}';
+  }
+
+  // Проверка корректности СНИЛСа
+  bool _isValidSnils(String snils) {
+    // Временно отключаем проверку СНИЛСа
+    return true;
+  }
+}
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\news_service.dart
 Content:
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
-
+import '../screens/login_screen.dart'; // Добавлен импорт
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
+import 'package:flutter/material.dart';
 class NewsService {
-  static const String _baseUrl = 'mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
 
-  static Map<String, String> _getHeaders(String guid) {
+  static Map<String, String> _getHeaders(String guid, String deviceId) {
     return {
-      ...AuthService.baseHeaders,
+      ...AppConstants.baseHeaders,
       'ma-guid': guid,
+      'deviceId': deviceId, // Добавляем deviceId
     };
   }
 
@@ -3843,11 +4883,14 @@ class NewsService {
     DateTime? startDate,
     DateTime? endDate,
     String? searchQuery,
+    required BuildContext context, // Добавляем контекст
   }) async {
     try {
-      final guid = await AuthService().getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID не найден');
+      final authService = AuthService();
+      final guid = await authService.getGUID();
+      final deviceId = await authService.getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID или deviceId не найдены');
       }
       final uri = Uri(
         scheme: 'https',
@@ -3863,7 +4906,7 @@ class NewsService {
         },
       );
       print('Запрос к URI: $uri');
-      final response = await http.get(uri, headers: _getHeaders(guid));
+      final response = await http.get(uri, headers: _getHeaders(guid, deviceId));
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
         if (json['success'] == true && json['data'] != null) {
@@ -3872,6 +4915,14 @@ class NewsService {
           } else {
             throw Exception('Некорректный формат данных: "data" не является списком');
           }
+        } else if (json['error'] == 'Выход на других устройствах.') {
+          await authService.logout();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => LoginScreen()),
+                (route) => false,
+          );
+          throw Exception('Вы вышли со всех устройств');
         } else {
           throw Exception('Ошибка в структуре ответа: ${json['error']}');
         }
@@ -3884,16 +4935,15 @@ class NewsService {
     }
   }
 }
-
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\phone_edit_service.dart
 Content:
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'dart:io';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../utils/constants.dart';
-import '../services/auth_service.dart';
+import 'auth_service.dart';
+import '../screens/login_screen.dart'; // Добавлен импорт
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
+import 'package:flutter/material.dart';
 
 class PhoneEditService {
   static const String _baseUrl = AppConstants.baseUrl;
@@ -3902,43 +4952,77 @@ class PhoneEditService {
   static Future<Map<String, dynamic>> editPhoneNumber({
     required String newPhone,
     required int step,
+    required BuildContext context, // Добавляем контекст
   }) async {
     try {
-      final guid = await AuthService().getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID пользователя не найден');
+      final authService = AuthService();
+      final guid = await authService.getGUID();
+      final deviceId = await authService.getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID пользователя или deviceId не найдены');
       }
-
-      final bodyMap = {'newPhone': newPhone, 'step': step};
+      // Форматируем номер телефона
+      String formattedPhone = newPhone.replaceAll(RegExp(r'\D'), ''); // Удаляем все символы, кроме цифр
+      if (formattedPhone.startsWith('8')) {
+        formattedPhone = '7' + formattedPhone.substring(1); // Заменяем 8 на 7
+      }
+      if (formattedPhone.length == 10) {
+        formattedPhone = '+7$formattedPhone';
+      } else if (formattedPhone.length == 11) {
+        formattedPhone = '+$formattedPhone';
+      }
+      if (formattedPhone.length == 12) {
+        formattedPhone = formattedPhone.replaceFirstMapped(RegExp(r'^(\+\d{1})(\d{3})(\d{3})(\d{2})(\d{2})$'), (match) {
+          return '${match[1]} (${match[2]}) ${match[3]}-${match[4]}-${match[5]}';
+        });
+      }
+      final bodyMap = {
+        'newPhone': formattedPhone,
+        'step': step,
+      };
       final encodedBody = base64.encode(utf8.encode(json.encode(bodyMap)));
-
       final uri = Uri(
         scheme: 'https',
         host: _baseUrl,
         port: _port,
         path: '/hrm/hs/ewp/edit_number_profile',
       );
-
       final response = await http.post(
         uri,
         headers: {
-          ...AuthService.baseHeaders,
+          ...AppConstants.baseHeaders,
           'ma-guid': guid,
+          'deviceId': deviceId, // Добавляем deviceId
         },
         body: encodedBody,
-      );
-
+      ).timeout(Duration(seconds: 10));
       print('Статус-код изменения номера телефона: ${response.statusCode}');
       print('Ответ сервера: ${response.body}');
-
       if (response.statusCode == 200 || response.statusCode == 409) {
         final decodedResponse = json.decode(response.body);
-        return {
-          'success': decodedResponse['success'] ?? false,
-          'data': decodedResponse['data'],
-          'error': decodedResponse['error'] ?? '',
-          'allowed': decodedResponse['allowed'] ?? false,
-        };
+        if (decodedResponse['success'] == true) {
+          return {
+            'success': true,
+            'data': decodedResponse['data'],
+            'error': '',
+            'allowed': decodedResponse['allowed'] ?? false,
+          };
+        } else if (decodedResponse['error'] == 'Выход на других устройствах.') {
+          await authService.logout();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => LoginScreen()),
+                (route) => false,
+          );
+          throw Exception('Вы вышли со всех устройств');
+        } else {
+          return {
+            'success': false,
+            'data': decodedResponse['data'],
+            'error': decodedResponse['error'] ?? '',
+            'allowed': decodedResponse['allowed'] ?? false,
+          };
+        }
       } else {
         throw Exception('HTTP-ошибка: ${response.statusCode}');
       }
@@ -3951,36 +5035,35 @@ class PhoneEditService {
     }
   }
 }
-
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\privacy_service.dart
 Content:
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../services/auth_service.dart';
-
+import '../screens/login_screen.dart'; // Добавлен импорт
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
+import 'package:flutter/material.dart';
 class PrivacyService {
-  static const String _baseUrl = 'mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
 
   Future<Map<String, bool>> getPrivacySettings() async {
     final guid = await AuthService().getGUID();
-    if (guid == null || guid.isEmpty) throw Exception('GUID не найден');
-
+    final deviceId = await AuthService().getDeviceId(); // Получаем deviceId
+    if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) throw Exception('GUID или deviceId не найдены');
     final uri = Uri(scheme: 'https', host: _baseUrl, port: _port, path: '/hrm/hs/ewp/privacy');
     final response = await http.get(
       uri,
       headers: {
-        ...AuthService.baseHeaders,
+        ...AppConstants.baseHeaders,
         'ma-guid': guid,
+        'deviceId': deviceId, // Добавляем deviceId
       },
     ).timeout(Duration(seconds: 10));
-
     if (response.statusCode != 200) throw Exception('Ошибка сети');
-
     final json = jsonDecode(response.body);
     if (json['success'] != true || json['data'] == null) throw Exception(json['error'] ?? 'Неизвестная ошибка');
-
     final data = json['data'] as Map<String, dynamic>;
     return {
       'number': data['number'] ?? false,
@@ -3990,34 +5073,47 @@ class PrivacyService {
     };
   }
 
-  Future<bool> updatePrivacySettings(Map<String, bool> settings) async {
+  Future<bool> updatePrivacySettings({
+    required Map<String, bool> settings,
+    required BuildContext context, // Добавляем контекст
+  }) async {
     final guid = await AuthService().getGUID();
-    if (guid == null || guid.isEmpty) throw Exception('GUID не найден');
-
+    final deviceId = await AuthService().getDeviceId(); // Получаем deviceId
+    if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) throw Exception('GUID или deviceId не найдены');
     final body = base64Encode(utf8.encode(jsonEncode({
       'number': settings['number'] ?? false,
       'birthday': settings['birthday'] ?? false,
       'mail': settings['mail'] ?? false,
       'links': settings['links'] ?? false,
     })));
-
     final uri = Uri(scheme: 'https', host: _baseUrl, port: _port, path: '/hrm/hs/ewp/edit_privacy');
     final response = await http.post(
       uri,
       headers: {
-        ...AuthService.baseHeaders,
+        ...AppConstants.baseHeaders,
         'ma-guid': guid,
+        'deviceId': deviceId, // Добавляем deviceId
       },
       body: body,
     ).timeout(Duration(seconds: 10));
-
-    if (response.statusCode != 200) throw Exception('Ошибка сети');
-
+    if (response.statusCode != 200) {
+      final json = jsonDecode(response.body);
+      if (json['error'] == 'Выход на других устройствах.') {
+        await AuthService().logout();
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (context) => LoginScreen()),
+              (route) => false,
+        );
+        throw Exception('Вы вышли со всех устройств');
+      } else {
+        throw Exception('HTTP-ошибка: ${response.statusCode}');
+      }
+    }
     final json = jsonDecode(response.body);
     return json['success'] == true && json['data'] == 'Успешно';
   }
 }
-
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\profile_edit_service.dart
 Content:
@@ -4027,6 +5123,8 @@ import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/constants.dart';
 import '../services/auth_service.dart';
+import '../screens/login_screen.dart'; // Добавлен импорт
+import 'package:flutter/material.dart';
 
 class ProfileEditService {
   static const String _baseUrl = AppConstants.baseUrl;
@@ -4036,43 +5134,50 @@ class ProfileEditService {
     required String email,
     Map<String, String> links = const {},
     String? photoBase64,
+    required BuildContext context, // Добавляем контекст
   }) async {
     try {
       final guid = await AuthService().getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID пользователя не найден');
+      final deviceId = await AuthService().getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID пользователя или deviceId не найдены');
       }
-
       final bodyMap = {
         'email': email,
         'links': links,
         'photo': photoBase64 ?? '',
       };
-
       final encodedBody = base64.encode(utf8.encode(json.encode(bodyMap)));
-
       final uri = Uri(
         scheme: 'https',
         host: _baseUrl,
         port: _port,
         path: '/hrm/hs/ewp/edit_profile',
       );
-
       final response = await http.post(
         uri,
         headers: {
-          ...AuthService.baseHeaders,
+          ...AppConstants.baseHeaders,
           'ma-guid': guid,
+          'deviceId': deviceId, // Добавляем deviceId
         },
         body: encodedBody,
       );
-
       if (response.statusCode != 200) {
-        throw Exception('Ошибка сервера: ${response.statusCode}');
+        final json = jsonDecode(response.body);
+        if (json['error'] == 'Выход на других устройствах.') {
+          await AuthService().logout();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => LoginScreen()),
+                (route) => false,
+          );
+          throw Exception('Вы вышли со всех устройств');
+        } else {
+          throw Exception('Ошибка сервера: ${response.statusCode}');
+        }
       }
-
       final decodedResponse = json.decode(response.body);
-
       if (decodedResponse['success'] == true) {
         return {
           'success': true,
@@ -4085,6 +5190,7 @@ class ProfileEditService {
         };
       }
     } catch (e) {
+      print('Ошибка при изменении профиля: $e');
       return {
         'success': false,
         'error': e.toString(),
@@ -4095,47 +5201,77 @@ class ProfileEditService {
   static Future<Map<String, dynamic>> editPhoneNumber({
     required String newPhone,
     required int step,
+    required BuildContext context, // Добавляем контекст
   }) async {
     try {
-      final guid = await AuthService().getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID пользователя не найден');
+      final authService = AuthService();
+      final guid = await authService.getGUID();
+      final deviceId = await authService.getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID пользователя или deviceId не найдены');
       }
-
+      // Форматируем номер телефона
+      String formattedPhone = newPhone.replaceAll(RegExp(r'\D'), ''); // Удаляем все символы, кроме цифр
+      if (formattedPhone.startsWith('8')) {
+        formattedPhone = '7' + formattedPhone.substring(1); // Заменяем 8 на 7
+      }
+      if (formattedPhone.length == 10) {
+        formattedPhone = '+7$formattedPhone';
+      } else if (formattedPhone.length == 11) {
+        formattedPhone = '+$formattedPhone';
+      }
+      if (formattedPhone.length == 12) {
+        formattedPhone = formattedPhone.replaceFirstMapped(RegExp(r'^(\+\d{1})(\d{3})(\d{3})(\d{2})(\d{2})$'), (match) {
+          return '${match[1]} (${match[2]}) ${match[3]}-${match[4]}-${match[5]}';
+        });
+      }
       final bodyMap = {
-        'newPhone': newPhone,
+        'newPhone': formattedPhone,
         'step': step,
       };
-
       final encodedBody = base64.encode(utf8.encode(json.encode(bodyMap)));
-
       final uri = Uri(
         scheme: 'https',
         host: _baseUrl,
         port: _port,
         path: '/hrm/hs/ewp/edit_number_profile',
       );
-
       final response = await http.post(
         uri,
         headers: {
-          ...AuthService.baseHeaders,
+          ...AppConstants.baseHeaders,
           'ma-guid': guid,
+          'deviceId': deviceId, // Добавляем deviceId
         },
         body: encodedBody,
-      );
-
+      ).timeout(Duration(seconds: 10));
       print('Статус-код изменения номера телефона: ${response.statusCode}');
       print('Ответ сервера: ${response.body}');
-
       if (response.statusCode == 200 || response.statusCode == 409) {
         final decodedResponse = json.decode(response.body);
-        return {
-          'success': decodedResponse['success'] ?? false,
-          'data': decodedResponse['data'],
-          'error': decodedResponse['error'] ?? '',
-          'allowed': decodedResponse['allowed'] ?? false,
-        };
+        if (decodedResponse['success'] == true) {
+          return {
+            'success': true,
+            'data': decodedResponse['data'],
+            'error': '',
+            'allowed': decodedResponse['allowed'] ?? false,
+          };
+        } else if (decodedResponse['error'] == 'Выход на других устройствах.') {
+          await authService.logout();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => LoginScreen()),
+                (route) => false,
+          );
+          throw Exception('Вы вышли со всех устройств');
+        } else {
+          return {
+            'success': false,
+            'data': decodedResponse['data'],
+            'error': decodedResponse['error'] ?? '',
+            'allowed': decodedResponse['allowed'] ?? false,
+          };
+        }
       } else {
         throw Exception('HTTP-ошибка: ${response.statusCode}');
       }
@@ -4148,24 +5284,26 @@ class ProfileEditService {
     }
   }
 }
-
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\profile_service.dart
 Content:
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth_service.dart';
-
+import '../screens/login_screen.dart'; // Добавлен импорт
+import '../../utils/constants.dart'; // Добавлен импорт AppConstants
+import 'package:flutter/material.dart';
 class ProfileService {
-  static const String _baseUrl = 'mw.azs-topline.ru';
-  static const int _port = 44445;
+  static const String _baseUrl = AppConstants.baseUrl;
+  static const int _port = AppConstants.port;
 
-  Future<Map<String, dynamic>> getProfile() async {
+  Future<Map<String, dynamic>> getProfile(BuildContext context) async {
     try {
       final authService = AuthService();
       final guid = await authService.getGUID();
-      if (guid == null || guid.isEmpty) {
-        throw Exception('GUID не найден');
+      final deviceId = await authService.getDeviceId(); // Получаем deviceId
+      if (guid == null || guid.isEmpty || deviceId == null || deviceId.isEmpty) {
+        throw Exception('GUID или deviceId не найдены');
       }
       final uri = Uri(
         scheme: 'https',
@@ -4176,15 +5314,25 @@ class ProfileService {
       final response = await http.get(
         uri,
         headers: {
-          ...AuthService.baseHeaders,
+          ...AppConstants.baseHeaders,
           'ma-guid': guid,
+          'deviceId': deviceId, // Добавляем deviceId
         },
       ).timeout(Duration(seconds: 10));
+      print('Статус-код получения данных профиля: ${response.statusCode}');
+      print('Ответ сервера: ${response.body}');
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
-        print('Ответ сервера: $json');
         if (json['success'] == true && json['data'] != null) {
           return json['data']; // Изменено: извлекаем данные из поля 'data'
+        } else if (json['error'] == 'Выход на других устройствах.') {
+          await authService.logout();
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (context) => LoginScreen()),
+                (route) => false,
+          );
+          throw Exception('Вы вышли со всех устройств');
         } else {
           throw Exception(json['error'] ?? 'Неизвестная ошибка');
         }
@@ -4197,10 +5345,10 @@ class ProfileService {
     }
   }
 }
-
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\services\registration_service.dart
 Content:
+// lib/services/registration_service.dart
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
@@ -4235,44 +5383,40 @@ class RegistrationService {
   }) async {
     try {
       final uri = _buildUri('registration');
-
       // Формируем тело запроса
+      final formattedSnils = _formatSnils(snils);
+      if (formattedSnils == null) {
+        throw Exception('Неверный формат СНИЛС');
+      }
       final bodyMap = {
         "name": name,
         "surname": surname,
         "patronymic": patronymic,
         "birthdate": birthdate.replaceAll('-', '').replaceAll(' ', ''),
-        "snils": snils.replaceAll('-', '').replaceAll(' ', ''),
+        "snils": formattedSnils.replaceAll('-', '').replaceAll(' ', ''),
         "login": login,
         "password": password,
       };
-
       // Кодируем тело запроса в Base64
       Codec stringToBase64 = utf8.fuse(base64);
       final body = stringToBase64.encode(jsonEncode(bodyMap));
       print('Тело запроса (Base64): $body'); // Логирование тела запроса
-
       // Логирование заголовков
       print('Заголовки запроса: ${AppConstants.baseHeaders}');
-
       final response = await http.post(
         uri,
         headers: AppConstants.baseHeaders,
         body: body,
       );
-
       print('Статус-код регистрации: ${response.statusCode}');
       print('Ответ сервера: ${response.body}');
-
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
         if (json['success'] == true && json['data'] != null) {
           final guid = json['data']['GUID'];
           final status = json['data']['status'];
-
           // Сохраняем GUID локально
           await _saveModerationGUID(guid);
-
           return {
             'success': true,
             'guid': guid,
@@ -4294,37 +5438,29 @@ class RegistrationService {
   Future<Map<String, dynamic>> checkModerationStatus(String guid) async {
     try {
       final uri = _buildUri('moderation');
-
       // Формируем тело запроса
       final bodyMap = {"GUID": guid};
-
       // Кодируем тело запроса в Base64
       Codec stringToBase64 = utf8.fuse(base64);
       final body = stringToBase64.encode(jsonEncode(bodyMap));
       print('Тело запроса (Base64): $body'); // Логирование тела запроса
-
       // Логирование заголовков
       print('Заголовки запроса: ${AppConstants.baseHeaders}');
-
       final response = await http.post(
         uri,
         headers: AppConstants.baseHeaders,
         body: body,
       );
-
       print('Статус-код модерации: ${response.statusCode}');
       print('Ответ сервера: ${response.body}');
-
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
         if (json['success'] == true && json['data'] != null) {
           final status = json['data']['status'];
-
           // Если статус не "На модерации", удаляем GUID
           if (status != 'На модерации') {
             await _clearModerationGUID();
           }
-
           return {
             'success': true,
             'status': status,
@@ -4360,8 +5496,16 @@ class RegistrationService {
     await prefs.remove('moderation_guid');
     print('GUID модерации удален');
   }
-}
 
+  // Метод форматирования СНИЛСа
+  String? _formatSnils(String snils) {
+    final digits = snils.replaceAll(RegExp(r'\D'), '');
+    if (digits.length != 11) {
+      return null;
+    }
+    return '${digits.substring(0, 3)}-${digits.substring(3, 6)}-${digits.substring(6, 9)} ${digits.substring(9)}';
+  }
+}
 --------------------------------------------------
 File Path: c:\Users\User\StudioProjects\MyApplication\my_app\lib\utils\constants.dart
 Content:

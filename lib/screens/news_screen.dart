@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../services//news_service.dart';
-import 'news_detail_screen.dart';
+import '../services/news_service.dart';
+import './news_detail_screen.dart';
 
 class NewsScreen extends StatefulWidget {
   @override
@@ -22,7 +22,11 @@ class _NewsScreenState extends State<NewsScreen> {
   Future<List<Map<String, dynamic>>> _fetchNewsData() async {
     try {
       final newsService = NewsService();
-      final newsList = await newsService.getNews(limit: 50, offset: 0);
+      final newsList = await newsService.getNews(
+        limit: 50,
+        offset: 0,
+        context: context, // Передаем контекст
+      );
       if (newsList is! List) {
         throw Exception('Некорректный формат данных: новости не являются списком');
       }
